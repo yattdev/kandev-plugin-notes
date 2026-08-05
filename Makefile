@@ -1,11 +1,9 @@
 .PHONY: build run test fmt vet package package-host clean
 
-# When you rename the plugin, update BIN and VERSION to match manifest.yaml's
-# id and version (PKG_OUT is derived from them).
-BIN := bin/kandev-plugin-template
+BIN := bin/kandev-plugin-notes
 VERSION := 0.1.0
 STAGE := .build/stage
-PKG_OUT := kandev-plugin-template-$(VERSION).tar.gz
+PKG_OUT := kandev-plugin-notes-$(VERSION).tar.gz
 
 ## Build the plugin binary for the host platform (development use). kandev
 ## itself always installs from `make package`/`package-host` output, not this.
@@ -21,6 +19,7 @@ run: build
 
 test:
 	go test ./server/...
+	node --test "ui/**/*.test.mjs"
 
 fmt:
 	gofmt -l .
@@ -37,7 +36,8 @@ package:
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/server
 	cp manifest.yaml $(STAGE)/manifest.yaml
-	cp -r ui $(STAGE)/ui
+	mkdir -p $(STAGE)/ui
+	cp ui/bundle.js $(STAGE)/ui/bundle.js
 	GOOS=linux   GOARCH=amd64 go build -o $(STAGE)/server/plugin-linux-amd64       ./server
 	GOOS=linux   GOARCH=arm64 go build -o $(STAGE)/server/plugin-linux-arm64       ./server
 	GOOS=darwin  GOARCH=amd64 go build -o $(STAGE)/server/plugin-darwin-amd64      ./server
@@ -53,11 +53,12 @@ package-host:
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/server
 	cp manifest.yaml $(STAGE)/manifest.yaml
-	cp -r ui $(STAGE)/ui
+	mkdir -p $(STAGE)/ui
+	cp ui/bundle.js $(STAGE)/ui/bundle.js
 	go build -o $(STAGE)/server/plugin-$$(go env GOOS)-$$(go env GOARCH)$$(go env GOEXE) ./server
 	go run github.com/kandev/kandev/cmd/plugin-pack -dir $(STAGE) -out $(PKG_OUT) -platform-only
 	rm -rf $(STAGE)
 	@echo "Wrote $(PKG_OUT)"
 
 clean:
-	rm -rf bin $(STAGE) kandev-plugin-template-*.tar.gz
+	rm -rf bin $(STAGE) kandev-plugin-notes-*.tar.gz

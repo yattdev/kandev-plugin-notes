@@ -3,10 +3,7 @@
 A [Kandev](https://github.com/kdlbs/kandev) plugin that gives every task a
 private, rich-text notes scratchpad.
 
-> **Status: in development.** This commit bootstraps the repository. The plugin
-> itself is not implemented yet.
-
-## What it will do
+## What it does
 
 - **Notes task panel** — a dockview panel in the task workspace (`+` → Notes),
   also available on a phone under the grouped **Panels** bottom-nav action.
