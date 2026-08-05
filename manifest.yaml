@@ -1,0 +1,71 @@
+# kandev plugin manifest — the single declarative contract between your
+# plugin and a kandev host. Everything kandev needs to install, spawn, and
+# route to your plugin is described here. Start by renaming the plugin:
+# change `id`, `display_name`, `description`, and `author` to your own.
+#
+# `id` MUST match the Go module name in go.mod and the id you pass to
+# window.registerKandevPlugin(...) in ui/bundle.js, and it is the prefix of
+# every route kandev serves for you (/api/plugins/<id>/...). Keep the three
+# in sync when you rename.
+id: "kandev-plugin-template"
+api_version: 1
+version: "0.1.0"
+display_name: "Template Plugin"
+description: "Starter template for a kandev native-UI plugin: a nav item + native route, a chat-toolbar action, a backend tool/event/webhook, and operator settings."
+author: "your-name-here"
+categories: ["tools"]
+
+# runtime.executables maps each supported platform to the binary kandev
+# spawns as a gRPC subprocess. `make package` cross-compiles all five;
+# `make package-host` builds just the current one. The paths are relative to
+# the package root and must match what the Makefile writes into server/.
+runtime:
+  type: binary
+  executables:
+    linux-amd64: "server/plugin-linux-amd64"
+    linux-arm64: "server/plugin-linux-arm64"
+    darwin-amd64: "server/plugin-darwin-amd64"
+    darwin-arm64: "server/plugin-darwin-arm64"
+    windows-amd64: "server/plugin-windows-amd64.exe"
+
+# capabilities gate what the host will do for you. Declare only what you use.
+#   events: WS/backend event types delivered to Plugin.OnEvent (server side).
+#   state:  enables the Host GetState/SetState/... key-value store.
+# Other capabilities exist (e.g. api_read for the Host data API) — see the
+# kandev plugin docs. Remove `events`/`state` if your plugin doesn't need them.
+capabilities:
+  events: ["task.created"]
+  state: true
+
+# webhooks kandev proxies to Plugin.HandleWebhook at
+# POST /api/plugins/<id>/webhooks/<key>. Delete this block if unused.
+webhooks:
+  - key: "ping"
+    description: "Example inbound webhook; logs the delivery and returns 200."
+    method: "POST"
+
+# ui.bundle points at your hand-written, no-build ES module frontend half.
+# Remove this section for a backend-only plugin.
+ui:
+  bundle: "/ui/bundle.js"
+
+# config_schema declares operator-editable settings, rendered as a form at
+# Settings > Plugins > <display_name>. The plugin process reads saved values
+# through the Host GetConfig RPC (see greeting() in server/plugin.go, which
+# uses it to build the webhook reply). Fields marked `secret: true` render as
+# password inputs, are stored in kandev's encrypted vault, and are masked
+# everywhere except inside the plugin process. Delete this block if your
+# plugin has no settings.
+config_schema:
+  type: object
+  properties:
+    greeting:
+      type: string
+      title: "Greeting"
+      description: "Word the ping webhook reply starts with (empty = \"Hello\")."
+      default: "Hello"
+    api_token:
+      type: string
+      title: "API token"
+      description: "Example secret setting: masked in the UI and on the operator API, cleartext only inside the plugin process."
+      secret: true
