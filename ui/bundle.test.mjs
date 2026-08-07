@@ -272,7 +272,7 @@ test("openNoteModal opens a modal bound to the given taskId, with or without a t
 
   openNoteModal(host, "task-1");
   assert.equal(openModalCalls[0].title, "Edit notes");
-  assert.equal(openModalCalls[0].size, "lg");
+  assert.equal(openModalCalls[0].size, "xl");
 
   openNoteModal(host, "task-2", "Card Two");
   assert.equal(openModalCalls[1].title, "Edit notes — Card Two");

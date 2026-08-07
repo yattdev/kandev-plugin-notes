@@ -428,9 +428,16 @@ function NotesEditor({ host, taskId, surfaceId, presentation, editorKind = "rich
   const { jsx: h, ui } = host;
   const { snapshot, store } = useNoteStore(host, { taskId, surfaceId });
   const isMobile = presentation === "mobile";
-  const containerStyle = isMobile
-    ? { display: "flex", flexDirection: "column", height: "100%", padding: "0.5rem" }
-    : { display: "flex", flexDirection: "column", height: "100%", padding: "0.75rem" };
+  const isModal = editorKind === "plain";
+  const containerStyle = isModal
+    ? // The host's PluginModalHost dialog has no fixed height of its own —
+      // it sizes to fit content — so without an explicit min-height here the
+      // modal collapses to a cramped little box instead of the spacious
+      // writing surface a "big note editor" modal should be.
+      { display: "flex", flexDirection: "column", minHeight: "60vh", padding: "0.75rem" }
+    : isMobile
+      ? { display: "flex", flexDirection: "column", height: "100%", padding: "0.5rem" }
+      : { display: "flex", flexDirection: "column", height: "100%", padding: "0.75rem" };
 
   if (!snapshot) {
     return h("div", { style: containerStyle }, "Loading notes…");
@@ -481,13 +488,12 @@ function NotesEditor({ host, taskId, surfaceId, presentation, editorKind = "rich
     h("p", { style: { color: "var(--muted-foreground)", fontSize: "0.8rem", marginBottom: "0.5rem" } },
       "Private to you — only you can see this note.",
     ),
-    editorKind === "plain"
-      ? h("textarea", {
+    isModal
+      ? h(ui.Textarea, {
           value: snapshot.value,
           onChange: (e) => store.setValue(e.target.value),
           placeholder: "Jot a note about this task…",
-          className: "flex-1 min-h-0",
-          style: { resize: "none", width: "100%" },
+          className: "flex-1 h-full min-h-0 resize-none text-sm leading-relaxed",
           "data-testid": "notes-modal-editor",
         })
       : h(ui.RichTextEditor, {
@@ -590,7 +596,11 @@ export function openNoteModal(host, taskId, taskTitle) {
   host.openModal({
     title: taskTitle ? `Edit notes — ${taskTitle}` : "Edit notes",
     content: makeNoteModalContent(host, taskId),
-    size: "lg",
+    // "xl" (sm:max-w-5xl) is the widest size PluginModalOptions offers —
+    // closest match to a spacious note-editing surface, since the host's
+    // modal has no dedicated height preset the way PR #2050's own
+    // TaskNoteEditDialog does (see NotesEditor's isModal minHeight).
+    size: "xl",
   });
 }
 
