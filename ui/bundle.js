@@ -558,16 +558,40 @@ function makeCardIndicatorComponent(host) {
     const hasNote = useNoteIndicator(host, taskId);
     if (!taskId || !hasNote) return null;
     return host.jsx(
-      "span",
+      "button",
       {
+        type: "button",
         "data-testid": "notes-card-indicator",
-        title: "Has a private note",
-        "aria-label": "Has a private note",
-        style: { display: "inline-flex", alignItems: "center" },
+        title: "Edit notes",
+        "aria-label": "Edit notes",
+        style: {
+          display: "inline-flex",
+          alignItems: "center",
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+        },
+        onClick: (event) => {
+          // Stop this from also triggering the card's own click-through to
+          // open the task — the glyph is a shortcut to the note, not to the
+          // task page.
+          event.stopPropagation();
+          event.preventDefault();
+          openNoteModal(host, taskId);
+        },
       },
       bookGlyph(host.jsx),
     );
   };
+}
+
+export function openNoteModal(host, taskId, taskTitle) {
+  host.openModal({
+    title: taskTitle ? `Edit notes — ${taskTitle}` : "Edit notes",
+    content: makeNoteModalContent(host, taskId),
+    size: "lg",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -610,11 +634,7 @@ window.registerKandevPlugin("kandev-plugin-notes", {
       group: "edit",
       visible: (context) => Boolean(context.taskId),
       run: (context) => {
-        host.openModal({
-          title: `Edit notes — ${context.taskTitle}`,
-          content: makeNoteModalContent(host, context.taskId),
-          size: "lg",
-        });
+        openNoteModal(host, context.taskId, context.taskTitle);
       },
     });
   },

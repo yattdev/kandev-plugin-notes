@@ -156,6 +156,7 @@ const {
   initNoteIndicatorSubscription,
   disposeNoteIndicatorSubscription,
   makeNoteModalContent,
+  openNoteModal,
 } = bundle;
 
 test("registers under the manifest's plugin id", () => {
@@ -264,6 +265,23 @@ test("the kanban modal surface requests the plain-textarea fallback, not host.ui
   NoteModalContent();
 
   assert.equal(jsxCalls[0].props.editorKind, "plain");
+});
+
+test("openNoteModal opens a modal bound to the given taskId, with or without a title", () => {
+  const { host, openModalCalls, jsxCalls } = createFakeHost();
+
+  openNoteModal(host, "task-1");
+  assert.equal(openModalCalls[0].title, "Edit notes");
+  assert.equal(openModalCalls[0].size, "lg");
+
+  openNoteModal(host, "task-2", "Card Two");
+  assert.equal(openModalCalls[1].title, "Edit notes — Card Two");
+
+  // Both calls must bind to their own taskId, not share state.
+  openModalCalls[0].content();
+  openModalCalls[1].content();
+  assert.equal(jsxCalls[0].props.taskId, "task-1");
+  assert.equal(jsxCalls[1].props.taskId, "task-2");
 });
 
 // --- AC12: ifUnmodifiedSince tracks the latest updatedAt -------------------
