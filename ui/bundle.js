@@ -374,6 +374,16 @@ export function makeNoteModalContent(host, taskId) {
       taskId,
       surfaceId: "note-modal",
       presentation: "desktop",
+      // host.ui.RichTextEditor (TipTapPlanEditor) calls useMermaidErrorToast,
+      // which requires a ToastProvider ancestor. The host's own
+      // PluginModalHost (components/plugins/plugin-modal-host.tsx) does not
+      // render one, so mounting the rich editor here throws and the modal
+      // body goes blank (title bar only) — a host-platform gap, not
+      // something this plugin's own repo can fix. Fall back to a plain
+      // textarea for this one surface until that's addressed upstream; the
+      // task panel keeps the full rich editor, which does have a
+      // ToastProvider ancestor.
+      editorKind: "plain",
     });
   };
 }
@@ -414,7 +424,7 @@ function useNoteStore(host, { taskId, surfaceId }) {
   return { snapshot, store: storeRef.current };
 }
 
-function NotesEditor({ host, taskId, surfaceId, presentation }) {
+function NotesEditor({ host, taskId, surfaceId, presentation, editorKind = "rich" }) {
   const { jsx: h, ui } = host;
   const { snapshot, store } = useNoteStore(host, { taskId, surfaceId });
   const isMobile = presentation === "mobile";
@@ -471,14 +481,23 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
     h("p", { style: { color: "var(--muted-foreground)", fontSize: "0.8rem", marginBottom: "0.5rem" } },
       "Private to you — only you can see this note.",
     ),
-    h(ui.RichTextEditor, {
-      taskId,
-      value: snapshot.value,
-      onChange: (next) => store.setValue(next),
-      placeholder: "Jot a note about this task…",
-      className: isMobile ? "flex-1 min-h-0" : "flex-1 min-h-0",
-      testId: "notes-panel-editor",
-    }),
+    editorKind === "plain"
+      ? h("textarea", {
+          value: snapshot.value,
+          onChange: (e) => store.setValue(e.target.value),
+          placeholder: "Jot a note about this task…",
+          className: "flex-1 min-h-0",
+          style: { resize: "none", width: "100%" },
+          "data-testid": "notes-modal-editor",
+        })
+      : h(ui.RichTextEditor, {
+          taskId,
+          value: snapshot.value,
+          onChange: (next) => store.setValue(next),
+          placeholder: "Jot a note about this task…",
+          className: isMobile ? "flex-1 min-h-0" : "flex-1 min-h-0",
+          testId: "notes-panel-editor",
+        }),
     status,
   );
 }

@@ -252,6 +252,20 @@ test("AC11: the kanban modal surface uses the bare id 'note-modal' as its writer
   assert.equal(jsxCalls[0].props.surfaceId, "note-modal");
 });
 
+// Regression: host.ui.RichTextEditor (TipTapPlanEditor) requires a
+// ToastProvider ancestor that the host's PluginModalHost does not provide,
+// so it throws when mounted inside a plugin modal (observed live: the modal
+// renders its title bar but an empty body). The modal surface must request
+// the plain-textarea fallback so it stays editable until that host gap is
+// fixed upstream.
+test("the kanban modal surface requests the plain-textarea fallback, not host.ui.RichTextEditor", () => {
+  const { host, jsxCalls } = createFakeHost();
+  const NoteModalContent = makeNoteModalContent(host, "task-42");
+  NoteModalContent();
+
+  assert.equal(jsxCalls[0].props.editorKind, "plain");
+});
+
 // --- AC12: ifUnmodifiedSince tracks the latest updatedAt -------------------
 
 test("AC12: every set carries ifUnmodifiedSince from the last successful get/set", async () => {
