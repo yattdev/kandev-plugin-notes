@@ -265,12 +265,16 @@ test("AC11: the kanban modal surface uses the bare id 'note-modal' as its writer
   assert.equal(jsxCalls[0].props.surfaceId, "note-modal");
 });
 
-// The kanban modal surface shares the exact same markdown editor as the
-// task panel (see the file header and makeNoteModalContent's own comment):
-// there is no more editorKind/RichTextEditor branch. presentation: "modal"
-// is the only signal NotesEditor needs to give the modal its fixed-height
-// container (AC: fixed modal size with scrollable textarea) instead of the
-// panel's height: 100%.
+// The kanban modal surface renders the same NotesEditor component as the
+// task panel (see the file header and makeNoteModalContent's own comment)
+// — presentation: "modal" is the one prop that both (a) gives the modal its
+// fixed-height container (AC: fixed modal size with scrollable textarea)
+// instead of the panel's height: 100%, and (b) tells NotesEditor's own
+// internals to render the markdown textarea + toolbar instead of
+// host.ui.RichTextEditor (which cannot mount inside the host's
+// PluginModalHost — see makeNoteModalContent's comment). There is no
+// separate editorKind prop; the branch lives inside NotesEditor, keyed off
+// presentation alone.
 test("the kanban modal surface uses presentation 'modal', the same NotesEditor as the panel", () => {
   const { host, jsxCalls } = createFakeHost();
   const NoteModalContent = makeNoteModalContent(host, "task-42");

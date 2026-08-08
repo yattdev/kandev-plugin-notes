@@ -7,16 +7,22 @@
 // (`make package` / `make package-host`).
 //
 // The plugin: a per-user, private scratchpad note on a task, edited as
-// markdown through one shared editor on both surfaces:
-//   - A task panel (registerTaskPanel, mobileEnabled) and
+// markdown on two surfaces:
+//   - A task panel (registerTaskPanel, mobileEnabled) — renders
+//     host.ui.RichTextEditor, the same TipTap-based WYSIWYG editor the Plan
+//     panel uses (markdown-in/markdown-out via tiptap-markdown, bold/
+//     italic/headings/lists/links/code blocks/checklists all reachable
+//     through its own bubble menu and "/" slash commands — no custom
+//     toolbar needed, mirroring how the Plan panel itself has none), and
 //   - a kanban card menu action (registerTaskMenuAction, group "edit") that
-//     opens the same editor in a modal, bound to that card's own taskId.
-//   Both render a scrollable markdown `<textarea>` with a formatting
-//   toolbar (bold/italic/heading/lists/link/code) above it, and autosave
-//   through host.storage. This editor intentionally does not use
-//   host.ui.RichTextEditor (see makeNoteModalContent's history below for
-//   why the modal surface could never use it) — one markdown editor keeps
-//   both surfaces byte-identical and needs no host WYSIWYG dependency.
+//     opens a modal, bound to that card's own taskId. The modal keeps a
+//     scrollable markdown `<textarea>` with its own formatting toolbar
+//     (bold/italic/heading/lists/link/code/checklist) instead, because
+//     host.ui.RichTextEditor cannot mount inside the host's PluginModalHost
+//     (see makeNoteModalContent's comment for the ToastProvider gap this
+//     hits — host-platform code this repo cannot change).
+//   Both surfaces autosave through host.storage on the same debounced,
+//   conflict-aware store.
 //   - A task-card-indicators component shows a glyph when the task has a
 //     non-empty note.
 //   - An "Enhance with AI" button (both surfaces) sends the note's current
@@ -668,11 +674,14 @@ export function disposeNoteIndicatorSubscription() {
 // "current task".
 //
 // presentation: "modal" gives NotesEditor its fixed-height container (see
-// below) — this was previously the surface that had to fall back to a plain
-// `<textarea>` because host.ui.RichTextEditor's ToastProvider dependency
-// isn't satisfied inside the host's PluginModalHost (a host-platform gap,
-// not fixable from this repo). Now that both surfaces share one markdown
-// editor, that gap no longer applies to either surface.
+// below) AND keeps it on the markdown-textarea-plus-toolbar editor rather
+// than host.ui.RichTextEditor (the real, Plan-panel-identical TipTap editor
+// NotesEditor uses for the "panel"/"mobile" surfaces below): RichTextEditor
+// internally calls useMermaidErrorToast, which requires a ToastProvider
+// ancestor, and the host's PluginModalHost (where this modal mounts) does
+// not render one — confirmed live (empty, uneditable modal body). That is
+// host-platform code this repo cannot change, so the modal keeps the
+// textarea+toolbar fallback until the host wraps plugin modals in one.
 // ---------------------------------------------------------------------------
 export function makeNoteModalContent(host, taskId) {
   return function NoteModalContent() {
@@ -779,6 +788,13 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
 
   const isMobile = presentation === "mobile";
   const isModal = presentation === "modal";
+  // The panel/mobile surfaces use host.ui.RichTextEditor — the same TipTap
+  // editor the Plan panel renders (bold/italic/headings/lists/links/code
+  // blocks/checklists all built in via its own bubble menu + "/" slash
+  // commands, no custom toolbar needed). The kanban modal surface cannot:
+  // see makeNoteModalContent's comment for why (ToastProvider gap in
+  // PluginModalHost) — it keeps the markdown textarea + MarkdownToolbar.
+  const useRichEditor = !isModal;
   const containerStyle = isModal
     ? // Fixed height (not a min-height) so the modal itself stops growing as
       // content is typed — the editor below scrolls internally instead
@@ -800,6 +816,36 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
       pendingSelectionRef.current = null;
     }
   });
+
+  // RichTextEditor (see rich-text-editor.tsx) only consumes its `value` prop
+  // as the TipTap editor's *initial* content — like the Plan panel, there is
+  // no effect syncing later `value` changes into an already-mounted editor.
+  // The Plan panel's own fix for this is to bump a `key` (see
+  // task-plan-panel.tsx's `editorKey`) to force a remount whenever the
+  // content changes for a reason other than the editor's own onChange (a
+  // cross-tab sync refresh, or an accepted "Enhance with AI" preview) — this
+  // mirrors that pattern. lastRichValueRef tracks the value this editor
+  // instance already has, so the effect below can tell "my own onChange
+  // echoed back" (no remount, would cost the caret position) apart from "the
+  // value moved out from under me" (remount needed).
+  const [editorKey, setEditorKey] = React.useState(0);
+  const lastRichValueRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!useRichEditor || !snapshot || !snapshot.loaded) return;
+    if (lastRichValueRef.current === null) {
+      lastRichValueRef.current = snapshot.value;
+      return;
+    }
+    if (snapshot.value !== lastRichValueRef.current) {
+      lastRichValueRef.current = snapshot.value;
+      setEditorKey((k) => k + 1);
+    }
+  }, [useRichEditor, snapshot && snapshot.loaded, snapshot && snapshot.value]);
+
+  function handleRichTextChange(next) {
+    lastRichValueRef.current = next;
+    store.setValue(next);
+  }
 
   if (!snapshot) {
     return h("div", { style: containerStyle }, "Loading notes…");
@@ -976,24 +1022,39 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
         style: {
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          justifyContent: useRichEditor ? "flex-end" : "space-between",
           gap: "0.5rem",
           marginBottom: "0.5rem",
           flexWrap: "wrap",
         },
       },
-      h(MarkdownToolbar, { host, onAction: applyTransform, disabled: isEnhancing }),
+      // The rich editor (panel/mobile) needs no custom toolbar — bold,
+      // italic, headings, lists, links, code blocks and checklists are all
+      // reachable through its own bubble menu (on selection) and "/" slash
+      // commands, exactly like the Plan panel. Only the modal's plain
+      // textarea needs MarkdownToolbar's buttons.
+      useRichEditor ? null : h(MarkdownToolbar, { host, onAction: applyTransform, disabled: isEnhancing }),
       enhanceButton,
     ),
-    h(ui.Textarea, {
-      ref: textareaRef,
-      value: snapshot.value,
-      onChange: (e) => store.setValue(e.target.value),
-      placeholder: "Jot a note about this task… (Markdown supported)",
-      className: "flex-1 min-h-0 resize-none text-sm leading-relaxed font-mono",
-      style: { overflowY: "auto" },
-      "data-testid": isModal ? "notes-modal-editor" : "notes-panel-editor",
-    }),
+    useRichEditor
+      ? h(ui.RichTextEditor, {
+          key: `${surfaceId}-${taskId}-${editorKey}`,
+          taskId,
+          value: snapshot.value,
+          onChange: handleRichTextChange,
+          placeholder: "Jot a note about this task… (Markdown supported)",
+          className: "flex-1 min-h-0",
+          testId: "notes-panel-editor",
+        })
+      : h(ui.Textarea, {
+          ref: textareaRef,
+          value: snapshot.value,
+          onChange: (e) => store.setValue(e.target.value),
+          placeholder: "Jot a note about this task… (Markdown supported)",
+          className: "flex-1 min-h-0 resize-none text-sm leading-relaxed font-mono",
+          style: { overflowY: "auto" },
+          "data-testid": "notes-modal-editor",
+        }),
     enhancePreview,
     enhanceError,
     status,
