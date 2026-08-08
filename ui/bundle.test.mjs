@@ -162,6 +162,7 @@ const {
   applyHeading,
   applyBulletList,
   applyNumberedList,
+  applyCheckboxList,
   applyLink,
   applyInlineCode,
   applyCodeBlock,
@@ -749,6 +750,54 @@ test("applyNumberedList at a blank line inserts a marker for typing", () => {
   assert.equal(result.value, "before\n1. \nafter");
   assert.equal(result.selStart, caretOnBlankLine + 3);
   assert.equal(result.selEnd, caretOnBlankLine + 3);
+});
+
+// --- applyCheckboxList: GFM task-list toolbar button ----------------------
+
+test("applyCheckboxList prefixes every non-blank selected line with '- [ ] '", () => {
+  const text = "milk\neggs\nbread";
+  const result = applyCheckboxList(text, 0, text.length);
+  assert.equal(result.value, "- [ ] milk\n- [ ] eggs\n- [ ] bread");
+});
+
+test("applyCheckboxList toggles the marker back off when every line already has it", () => {
+  const text = "- [ ] milk\n- [x] eggs";
+  const result = applyCheckboxList(text, 0, text.length);
+  assert.equal(result.value, "milk\neggs");
+});
+
+test("applyCheckboxList at an empty note inserts a checkbox marker", () => {
+  const result = applyCheckboxList("", 0, 0);
+  assert.equal(result.value, "- [ ] ");
+  assert.equal(result.selStart, 6);
+  assert.equal(result.selEnd, 6);
+});
+
+test("applyCheckboxList at a blank line inserts a marker for typing", () => {
+  const text = "before\n\nafter";
+  const caretOnBlankLine = "before\n".length;
+  const result = applyCheckboxList(text, caretOnBlankLine, caretOnBlankLine);
+  assert.equal(result.value, "before\n- [ ] \nafter");
+  assert.equal(result.selStart, caretOnBlankLine + 6);
+  assert.equal(result.selEnd, caretOnBlankLine + 6);
+});
+
+test("applyCheckboxList skips blank lines within the selection", () => {
+  const text = "milk\n\nbread";
+  const result = applyCheckboxList(text, 0, text.length);
+  assert.equal(result.value, "- [ ] milk\n\n- [ ] bread");
+});
+
+test("applyCheckboxList inserts the checkbox marker right after an existing plain bullet", () => {
+  const text = "- milk\n- eggs";
+  const result = applyCheckboxList(text, 0, text.length);
+  assert.equal(result.value, "- [ ] milk\n- [ ] eggs");
+});
+
+test("applyCheckboxList at a bare caret (no selection) only affects that line", () => {
+  const text = "milk\neggs\nbread";
+  const result = applyCheckboxList(text, 4, 4);
+  assert.equal(result.value, "- [ ] milk\neggs\nbread");
 });
 
 // ---------------------------------------------------------------------------

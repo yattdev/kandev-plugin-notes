@@ -212,6 +212,43 @@ export function applyNumberedList(text, selStart, selEnd) {
   };
 }
 
+// applyCheckboxList toggles a GFM task-list marker ("- [ ] ") on every
+// non-blank line the selection touches, mirroring applyBulletList's
+// "converges to all-listified in one click" idiom: toggling off requires
+// every non-blank line to already carry the checkbox marker, otherwise the
+// action adds it to whichever lines are missing it. A line that already has
+// a plain bullet ("- ") gets the checkbox inserted right after the dash
+// rather than double-prefixed, so "- item" becomes "- [ ] item".
+export function applyCheckboxList(text, selStart, selEnd) {
+  const { start, end } = lineRangeBounds(text, selStart, selEnd);
+  const block = text.slice(start, end);
+  if (selStart === selEnd && block.trim() === "") {
+    const marker = "- [ ] ";
+    const value = text.slice(0, start) + marker + block + text.slice(end);
+    return { value, selStart: selStart + marker.length, selEnd: selEnd + marker.length };
+  }
+  const lines = block.split("\n");
+  const checkboxRe = /^-\s+\[[ xX]\]\s+/;
+  const bulletOnlyRe = /^-\s+/;
+  const allChecked = lines.every((l) => checkboxRe.test(l) || l.trim() === "");
+  const newLines = lines.map((l) => {
+    if (l.trim() === "") return l;
+    if (allChecked) return l.replace(checkboxRe, "");
+    if (checkboxRe.test(l)) return l;
+    if (bulletOnlyRe.test(l)) return l.replace(bulletOnlyRe, (m) => `${m}[ ] `);
+    return `- [ ] ${l}`;
+  });
+  const newBlock = newLines.join("\n");
+  const value = text.slice(0, start) + newBlock + text.slice(end);
+  const deltaFirstLine = newLines[0].length - lines[0].length;
+  const deltaTotal = newBlock.length - block.length;
+  return {
+    value,
+    selStart: Math.max(start, selStart + deltaFirstLine),
+    selEnd: Math.max(start, selEnd + deltaTotal),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // enhanceNote — the "Enhance with AI" client. POSTs the note's current
 // markdown to this plugin's own `enhance` webhook (server/plugin.go), which
@@ -687,7 +724,7 @@ function useNoteStore(host, { taskId, surfaceId }) {
 
 // TOOLBAR_ACTIONS drives MarkdownToolbar: each entry pairs a short glyph
 // label (this bundle ships no icon set — see bookGlyph's own comment on why
-// SVGs are hand-inlined elsewhere; plain glyphs are simpler for eight small
+// SVGs are hand-inlined elsewhere; plain glyphs are simpler for nine small
 // buttons) with the pure transform it applies to the textarea's current
 // selection.
 const TOOLBAR_ACTIONS = [
@@ -696,13 +733,14 @@ const TOOLBAR_ACTIONS = [
   { id: "heading", title: "Heading", glyph: "H", apply: (text, selStart, selEnd) => applyHeading(text, selStart, selEnd, 2) },
   { id: "bullet-list", title: "Bullet list", glyph: "\u2022\u2261", apply: applyBulletList },
   { id: "numbered-list", title: "Numbered list", glyph: "1.\u2261", apply: applyNumberedList },
+  { id: "checkbox-list", title: "Checklist", glyph: "\u2611", apply: applyCheckboxList },
   { id: "link", title: "Link", glyph: "\uD83D\uDD17", apply: applyLink },
   { id: "inline-code", title: "Inline code", glyph: "</>", apply: applyInlineCode },
   { id: "code-block", title: "Code block", glyph: "{ }", apply: applyCodeBlock },
 ];
 
 // MarkdownToolbar — the formatting toolbar (AC: bold, italic, heading,
-// bullet/numbered list, link, inline code, code block). Each button calls
+// bullet/numbered/checkbox list, link, inline code, code block). Each button calls
 // onAction(applyFn); NotesEditor's applyTransform runs applyFn against the
 // textarea's current selection and applies the resulting value/selection.
 function MarkdownToolbar({ host, onAction, disabled }) {

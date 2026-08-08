@@ -9,11 +9,12 @@ AI-assisted proofreading.
 - **Notes task panel** — a dockview panel in the task workspace (`+` → Notes),
   also available on a phone under the grouped **Panels** bottom-nav action.
 - **Markdown editing with a formatting toolbar** — a scrollable markdown
-  `<textarea>` (bold, italic, headings, bullet/numbered lists, links, inline
-  code, and code blocks), shared byte-for-byte by the task panel and the
-  kanban modal, with debounced autosave. The toolbar's actions insert or wrap
-  the right markdown around your current selection (or at the caret) so you
-  never have to remember the syntax.
+  `<textarea>` (bold, italic, headings, bullet/numbered/checklist lists,
+  links, inline code, and code blocks), shared byte-for-byte by the task
+  panel and the kanban modal, with debounced autosave. The toolbar's actions
+  insert or wrap the right markdown around your current selection (or at the
+  caret) so you never have to remember the syntax — including GFM task-list
+  checkboxes (`- [ ] `) via the checklist button.
 - **Enhance with AI** — a button next to the toolbar sends the note's current
   markdown to your configured utility agent to proofread grammar, spelling,
   and clarity. The result is shown as a preview with **Accept**/**Discard**
