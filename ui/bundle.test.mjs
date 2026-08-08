@@ -157,6 +157,17 @@ const {
   disposeNoteIndicatorSubscription,
   makeNoteModalContent,
   openNoteModal,
+  applyBold,
+  applyItalic,
+  applyHeading,
+  applyBulletList,
+  applyNumberedList,
+  applyLink,
+  applyInlineCode,
+  applyCodeBlock,
+  enhanceNote,
+  enhancePreviewReducer,
+  initialEnhanceState,
 } = bundle;
 
 test("registers under the manifest's plugin id", () => {
@@ -253,18 +264,20 @@ test("AC11: the kanban modal surface uses the bare id 'note-modal' as its writer
   assert.equal(jsxCalls[0].props.surfaceId, "note-modal");
 });
 
-// Regression: host.ui.RichTextEditor (TipTapPlanEditor) requires a
-// ToastProvider ancestor that the host's PluginModalHost does not provide,
-// so it throws when mounted inside a plugin modal (observed live: the modal
-// renders its title bar but an empty body). The modal surface must request
-// the plain-textarea fallback so it stays editable until that host gap is
-// fixed upstream.
-test("the kanban modal surface requests the plain-textarea fallback, not host.ui.RichTextEditor", () => {
+// The kanban modal surface shares the exact same markdown editor as the
+// task panel (see the file header and makeNoteModalContent's own comment):
+// there is no more editorKind/RichTextEditor branch. presentation: "modal"
+// is the only signal NotesEditor needs to give the modal its fixed-height
+// container (AC: fixed modal size with scrollable textarea) instead of the
+// panel's height: 100%.
+test("the kanban modal surface uses presentation 'modal', the same NotesEditor as the panel", () => {
   const { host, jsxCalls } = createFakeHost();
   const NoteModalContent = makeNoteModalContent(host, "task-42");
   NoteModalContent();
 
-  assert.equal(jsxCalls[0].props.editorKind, "plain");
+  assert.equal(jsxCalls.length, 1);
+  assert.equal(jsxCalls[0].props.presentation, "modal");
+  assert.equal(jsxCalls[0].props.editorKind, undefined);
 });
 
 test("openNoteModal opens a modal bound to the given taskId, with or without a title", () => {
@@ -584,4 +597,246 @@ test("AC19: destroy() unsubscribes, clears the indicator cache, and clears pendi
   } finally {
     mock.timers.reset();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Markdown transforms (AC3: toolbar actions insert/wrap the correct markdown
+// around the selection, or at the caret with no selection, and return an
+// updated selection).
+// ---------------------------------------------------------------------------
+
+test("applyBold wraps a selection in ** markers and keeps it selected", () => {
+  const text = "hello world";
+  // select "world"
+  const result = applyBold(text, 6, 11);
+  assert.equal(result.value, "hello **world**");
+  assert.equal(result.value.slice(result.selStart, result.selEnd), "world");
+});
+
+test("applyBold with no selection inserts a placeholder wrapped in ** and selects it", () => {
+  const result = applyBold("hello ", 6, 6);
+  assert.equal(result.value, "hello **bold text**");
+  assert.equal(result.value.slice(result.selStart, result.selEnd), "bold text");
+});
+
+test("applyItalic wraps a selection in * markers", () => {
+  const result = applyItalic("hi there", 3, 8);
+  assert.equal(result.value, "hi *there*");
+  assert.equal(result.value.slice(result.selStart, result.selEnd), "there");
+});
+
+test("applyInlineCode wraps a selection in backticks", () => {
+  const result = applyInlineCode("run npm test now", 4, 12);
+  assert.equal(result.value, "run `npm test` now");
+  assert.equal(result.value.slice(result.selStart, result.selEnd), "npm test");
+});
+
+test("applyInlineCode with no selection inserts a `code` placeholder", () => {
+  const result = applyInlineCode("", 0, 0);
+  assert.equal(result.value, "`code`");
+  assert.equal(result.value.slice(result.selStart, result.selEnd), "code");
+});
+
+test("applyCodeBlock wraps a selection in a fenced code block", () => {
+  const result = applyCodeBlock("const x = 1;", 0, 12);
+  assert.equal(result.value, "```\nconst x = 1;\n```");
+  assert.equal(result.value.slice(result.selStart, result.selEnd), "const x = 1;");
+});
+
+test("applyCodeBlock with no selection inserts a placeholder fenced block", () => {
+  const result = applyCodeBlock("", 0, 0);
+  assert.equal(result.value, "```\ncode\n```");
+});
+
+test("applyLink wraps the selection as link text and selects the url placeholder", () => {
+  const result = applyLink("see docs here", 4, 8);
+  assert.equal(result.value, "see [docs](https://) here");
+  assert.equal(result.value.slice(result.selStart, result.selEnd), "https://");
+});
+
+test("applyLink with no selection inserts placeholder link text and selects the url", () => {
+  const result = applyLink("", 0, 0);
+  assert.equal(result.value, "[link text](https://)");
+  assert.equal(result.value.slice(result.selStart, result.selEnd), "https://");
+});
+
+test("applyHeading prepends a level-2 heading marker to the current line", () => {
+  const result = applyHeading("todo list", 3, 3);
+  assert.equal(result.value, "## todo list");
+});
+
+test("applyHeading toggles the same level back off", () => {
+  const once = applyHeading("todo list", 0, 0);
+  const twice = applyHeading(once.value, once.selStart, once.selEnd);
+  assert.equal(twice.value, "todo list");
+});
+
+test("applyHeading replaces a different existing heading level", () => {
+  const result = applyHeading("# title", 2, 2, 3);
+  assert.equal(result.value, "### title");
+});
+
+test("applyHeading only affects the line containing the caret in a multi-line note", () => {
+  const text = "first line\nsecond line\nthird line";
+  const caretInSecondLine = text.indexOf("second") + 2;
+  const result = applyHeading(text, caretInSecondLine, caretInSecondLine);
+  assert.equal(result.value, "first line\n## second line\nthird line");
+});
+
+test("applyBulletList prefixes every non-blank selected line with '- '", () => {
+  const text = "milk\neggs\nbread";
+  const result = applyBulletList(text, 0, text.length);
+  assert.equal(result.value, "- milk\n- eggs\n- bread");
+});
+
+test("applyBulletList toggles the marker back off when every line already has it", () => {
+  const text = "- milk\n- eggs";
+  const result = applyBulletList(text, 0, text.length);
+  assert.equal(result.value, "milk\neggs");
+});
+
+test("applyBulletList at a bare caret (no selection) only affects that line", () => {
+  const text = "just one line";
+  const result = applyBulletList(text, 4, 4);
+  assert.equal(result.value, "- just one line");
+});
+
+test("applyBulletList skips blank lines within the selection", () => {
+  const text = "milk\n\neggs";
+  const result = applyBulletList(text, 0, text.length);
+  assert.equal(result.value, "- milk\n\n- eggs");
+});
+
+test("applyNumberedList prefixes every non-blank selected line with sequential numbers", () => {
+  const text = "milk\neggs\nbread";
+  const result = applyNumberedList(text, 0, text.length);
+  assert.equal(result.value, "1. milk\n2. eggs\n3. bread");
+});
+
+test("applyNumberedList toggles the marker back off when every line already has it", () => {
+  const text = "1. milk\n2. eggs";
+  const result = applyNumberedList(text, 0, text.length);
+  assert.equal(result.value, "milk\neggs");
+});
+
+// ---------------------------------------------------------------------------
+// enhanceNote — the "Enhance with AI" client (AC5/AC6/AC7).
+// ---------------------------------------------------------------------------
+
+function fakeApiHost(fetchImpl) {
+  return { api: { fetch: fetchImpl } };
+}
+
+function fakeJsonResponse(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  };
+}
+
+test("enhanceNote posts the note content to webhooks/enhance and returns the improved content", async () => {
+  let capturedPath;
+  let capturedInit;
+  const host = fakeApiHost(async (path, init) => {
+    capturedPath = path;
+    capturedInit = init;
+    return fakeJsonResponse(200, { content: "improved markdown" });
+  });
+
+  const result = await enhanceNote(host, "raw markdown");
+  assert.equal(result, "improved markdown");
+  assert.equal(capturedPath, "webhooks/enhance");
+  assert.equal(capturedInit.method, "POST");
+  assert.equal(JSON.parse(capturedInit.body).content, "raw markdown");
+});
+
+test("enhanceNote maps a 412 response to a distinguishable notConfigured error", async () => {
+  const host = fakeApiHost(async () =>
+    fakeJsonResponse(412, { error: "no utility agent is configured for this plugin" }),
+  );
+
+  await assert.rejects(
+    () => enhanceNote(host, "raw markdown"),
+    (error) => {
+      assert.equal(error.notConfigured, true);
+      assert.match(error.message, /utility agent/);
+      return true;
+    },
+  );
+});
+
+test("enhanceNote surfaces other non-2xx statuses as a generic (non-notConfigured) error", async () => {
+  const host = fakeApiHost(async () => fakeJsonResponse(502, { error: "AI enhancement failed" }));
+
+  await assert.rejects(
+    () => enhanceNote(host, "raw markdown"),
+    (error) => {
+      assert.equal(error.notConfigured, false);
+      assert.equal(error.status, 502);
+      return true;
+    },
+  );
+});
+
+test("enhanceNote surfaces a network failure (fetch rejecting) as a non-notConfigured error", async () => {
+  const host = fakeApiHost(async () => {
+    throw new TypeError("Failed to fetch");
+  });
+
+  await assert.rejects(
+    () => enhanceNote(host, "raw markdown"),
+    (error) => {
+      assert.equal(error.notConfigured, false);
+      return true;
+    },
+  );
+});
+
+test("enhanceNote rejects when the success response is missing a content field", async () => {
+  const host = fakeApiHost(async () => fakeJsonResponse(200, {}));
+
+  await assert.rejects(() => enhanceNote(host, "raw markdown"));
+});
+
+// ---------------------------------------------------------------------------
+// enhancePreviewReducer — the preview/Accept/Discard state machine.
+// ---------------------------------------------------------------------------
+
+test("enhancePreviewReducer: start -> success -> accept returns to idle, preview held in between", () => {
+  let state = initialEnhanceState;
+  assert.equal(state.status, "idle");
+
+  state = enhancePreviewReducer(state, { type: "start" });
+  assert.equal(state.status, "loading");
+
+  state = enhancePreviewReducer(state, { type: "success", content: "better note" });
+  assert.equal(state.status, "preview");
+  assert.equal(state.preview, "better note");
+
+  state = enhancePreviewReducer(state, { type: "accept" });
+  assert.equal(state.status, "idle");
+});
+
+test("enhancePreviewReducer: discard returns to idle without carrying the preview forward", () => {
+  let state = enhancePreviewReducer(initialEnhanceState, { type: "start" });
+  state = enhancePreviewReducer(state, { type: "success", content: "better note" });
+  state = enhancePreviewReducer(state, { type: "discard" });
+  assert.equal(state.status, "idle");
+  assert.equal(state.preview, undefined);
+});
+
+test("enhancePreviewReducer: failure carries the message and notConfigured flag; dismiss returns to idle", () => {
+  let state = enhancePreviewReducer(initialEnhanceState, { type: "start" });
+  state = enhancePreviewReducer(state, {
+    type: "failure",
+    message: "No utility agent is configured for this plugin yet.",
+    notConfigured: true,
+  });
+  assert.equal(state.status, "error");
+  assert.equal(state.notConfigured, true);
+  assert.match(state.message, /utility agent/);
+
+  state = enhancePreviewReducer(state, { type: "dismiss" });
+  assert.equal(state.status, "idle");
 });

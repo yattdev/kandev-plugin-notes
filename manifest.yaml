@@ -5,9 +5,9 @@
 # (/api/plugins/<id>/...). Keep the three in sync when bumping version.
 id: "kandev-plugin-notes"
 api_version: 1
-version: "0.1.0"
+version: "0.2.0"
 display_name: "Notes"
-description: "A private, per-user scratchpad note on any task: a dockview/mobile panel, rich-text editing, and a kanban card shortcut."
+description: "A private, per-user scratchpad note on any task: a dockview/mobile panel, markdown editing with a formatting toolbar, AI-assisted proofreading, and a kanban card shortcut."
 author: "yattdev"
 categories: ["tools"]
 repo_url: "https://github.com/yattdev/kandev-plugin-notes"
@@ -26,10 +26,32 @@ runtime:
     windows-amd64: "server/plugin-windows-amd64.exe"
 
 # capabilities gate what the host will do for this plugin. This plugin needs
-# only per-user browser-reachable storage (host.storage) for the note itself
-# — no events, no Host state, no webhooks, no API read/write.
+# per-user browser-reachable storage (host.storage) for the note itself, plus
+# agent_invoke so the "Enhance with AI" button can run a one-shot proofreading
+# completion via Host.InvokeUtilityAgent (see server/plugin.go and the
+# `utility_agent` config property below).
 capabilities:
   user_state: true
+  agent_invoke: true
+
+# webhooks: the "Enhance with AI" button POSTs the note's current markdown to
+# this webhook (relayed at POST /api/plugins/kandev-plugin-notes/webhooks/enhance);
+# server/plugin.go's HandleWebhook proofreads it via Host.InvokeUtilityAgent
+# and returns the improved markdown for the UI's preview/Accept/Discard flow.
+webhooks:
+  - key: "enhance"
+    description: "Proofread and improve the current note's markdown via the configured utility agent"
+    method: "POST"
+
+# config_schema: agent_invoke requires a utility_agent picker (rendered at
+# Settings > Plugins > Notes) so the operator selects which agent runs the
+# enhance completion. Calling Host.InvokeUtilityAgent without a valid
+# selection here returns a distinguishable FailedPrecondition (see
+# server/plugin.go), surfaced by the UI as a non-fatal message.
+config_schema:
+  type: object
+  properties:
+    utility_agent: { type: string, format: utility-agent, title: "Utility Agent", description: "Agent used to proofread notes for the Enhance with AI button" }
 
 # ui.bundle points at the hand-written, no-build ES module frontend half.
 ui:
