@@ -159,6 +159,11 @@ export function applyHeading(text, selStart, selEnd, level = 2) {
 export function applyBulletList(text, selStart, selEnd) {
   const { start, end } = lineRangeBounds(text, selStart, selEnd);
   const block = text.slice(start, end);
+  if (selStart === selEnd && block.trim() === "") {
+    const marker = "- ";
+    const value = text.slice(0, start) + marker + block + text.slice(end);
+    return { value, selStart: selStart + marker.length, selEnd: selEnd + marker.length };
+  }
   const lines = block.split("\n");
   const bulletRe = /^-\s+/;
   const allBulleted = lines.every((l) => bulletRe.test(l) || l.trim() === "");
@@ -181,6 +186,11 @@ export function applyBulletList(text, selStart, selEnd) {
 export function applyNumberedList(text, selStart, selEnd) {
   const { start, end } = lineRangeBounds(text, selStart, selEnd);
   const block = text.slice(start, end);
+  if (selStart === selEnd && block.trim() === "") {
+    const marker = "1. ";
+    const value = text.slice(0, start) + marker + block + text.slice(end);
+    return { value, selStart: selStart + marker.length, selEnd: selEnd + marker.length };
+  }
   const lines = block.split("\n");
   const numberRe = /^\d+\.\s+/;
   const allNumbered = lines.every((l) => numberRe.test(l) || l.trim() === "");

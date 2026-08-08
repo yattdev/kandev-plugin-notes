@@ -701,6 +701,22 @@ test("applyBulletList at a bare caret (no selection) only affects that line", ()
   assert.equal(result.value, "- just one line");
 });
 
+test("applyBulletList at an empty note inserts a list marker", () => {
+  const result = applyBulletList("", 0, 0);
+  assert.equal(result.value, "- ");
+  assert.equal(result.selStart, 2);
+  assert.equal(result.selEnd, 2);
+});
+
+test("applyBulletList at a blank line inserts a marker for typing", () => {
+  const text = "before\n\nafter";
+  const caretOnBlankLine = "before\n".length;
+  const result = applyBulletList(text, caretOnBlankLine, caretOnBlankLine);
+  assert.equal(result.value, "before\n- \nafter");
+  assert.equal(result.selStart, caretOnBlankLine + 2);
+  assert.equal(result.selEnd, caretOnBlankLine + 2);
+});
+
 test("applyBulletList skips blank lines within the selection", () => {
   const text = "milk\n\neggs";
   const result = applyBulletList(text, 0, text.length);
@@ -717,6 +733,22 @@ test("applyNumberedList toggles the marker back off when every line already has 
   const text = "1. milk\n2. eggs";
   const result = applyNumberedList(text, 0, text.length);
   assert.equal(result.value, "milk\neggs");
+});
+
+test("applyNumberedList at an empty note inserts a numbered marker", () => {
+  const result = applyNumberedList("", 0, 0);
+  assert.equal(result.value, "1. ");
+  assert.equal(result.selStart, 3);
+  assert.equal(result.selEnd, 3);
+});
+
+test("applyNumberedList at a blank line inserts a marker for typing", () => {
+  const text = "before\n\nafter";
+  const caretOnBlankLine = "before\n".length;
+  const result = applyNumberedList(text, caretOnBlankLine, caretOnBlankLine);
+  assert.equal(result.value, "before\n1. \nafter");
+  assert.equal(result.selStart, caretOnBlankLine + 3);
+  assert.equal(result.selEnd, caretOnBlankLine + 3);
 });
 
 // ---------------------------------------------------------------------------
