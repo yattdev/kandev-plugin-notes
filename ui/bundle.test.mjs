@@ -169,6 +169,7 @@ const {
   enhanceNote,
   enhancePreviewReducer,
   initialEnhanceState,
+  injectPluginStyles,
 } = bundle;
 
 test("registers under the manifest's plugin id", () => {
@@ -601,6 +602,68 @@ test("AC19: destroy() unsubscribes, clears the indicator cache, and clears pendi
     assert.equal(await afterDestroy, false);
   } finally {
     mock.timers.reset();
+  }
+});
+
+test("AC19: initialize() does not throw without a `document` global (the Node test env has none)", () => {
+  assert.equal(typeof document, "undefined");
+  const { host } = createFakeHost();
+  const registry = createFakeRegistry();
+  assert.doesNotThrow(() => registeredPlugin.initialize(registry, host));
+});
+
+// injectPluginStyles hides the dead "comment" bubble-menu button
+// host.ui.RichTextEditor inherits unconditionally from the Plan editor (see
+// the function's own comment in bundle.js for why it can never be wired up
+// to anything from a plugin). This is the framework-free half of that fix —
+// a minimal fake `document` stands in for jsdom, since the fix's only real
+// behavior (idempotent single <style> tag, correct selector text) needs no
+// full DOM.
+function createFakeDocument() {
+  const elementsById = new Map();
+  const head = {
+    appendChild(el) {
+      elementsById.set(el.id, el);
+    },
+  };
+  return {
+    head,
+    getElementById: (id) => elementsById.get(id) || null,
+    createElement: () => ({ id: "", textContent: "" }),
+  };
+}
+
+test("injectPluginStyles adds exactly one <style> tag scoped to kandev-notes-richtext, hiding the accent comment button", () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = createFakeDocument();
+  try {
+    injectPluginStyles();
+    const style = globalThis.document.getElementById("kandev-plugin-notes-styles");
+    assert.ok(style, "expected a style tag to be inserted");
+    assert.match(style.textContent, /\.kandev-notes-richtext/);
+    assert.match(style.textContent, /\.bg-primary\.text-primary-foreground/);
+    assert.match(style.textContent, /display:\s*none\s*!important/);
+  } finally {
+    globalThis.document = originalDocument;
+  }
+});
+
+test("injectPluginStyles is idempotent — calling it twice leaves exactly one style tag", () => {
+  const originalDocument = globalThis.document;
+  const fakeDoc = createFakeDocument();
+  globalThis.document = fakeDoc;
+  let createCount = 0;
+  const realCreateElement = fakeDoc.createElement;
+  fakeDoc.createElement = (...args) => {
+    createCount++;
+    return realCreateElement(...args);
+  };
+  try {
+    injectPluginStyles();
+    injectPluginStyles();
+    assert.equal(createCount, 1);
+  } finally {
+    globalThis.document = originalDocument;
   }
 });
 
