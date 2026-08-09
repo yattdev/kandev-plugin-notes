@@ -1,27 +1,56 @@
 # kandev-plugin-notes
 
 A [Kandev](https://github.com/kdlbs/kandev) plugin that gives every task a
-private markdown notes scratchpad, with a formatting toolbar and optional
-AI-assisted proofreading.
+private markdown notes scratchpad, edited with a rich, Plan-panel-style
+editor and optional AI-assisted proofreading.
 
 ## What it does
 
 - **Notes task panel** — a dockview panel in the task workspace (`+` → Notes),
   also available on a phone under the grouped **Panels** bottom-nav action.
-- **Markdown editing with a formatting toolbar** — a scrollable markdown
-  `<textarea>` (bold, italic, headings, bullet/numbered lists, links, inline
-  code, and code blocks), shared byte-for-byte by the task panel and the
-  kanban modal, with debounced autosave. The toolbar's actions insert or wrap
-  the right markdown around your current selection (or at the caret) so you
-  never have to remember the syntax.
-- **Enhance with AI** — a button next to the toolbar sends the note's current
-  markdown to your configured utility agent to proofread grammar, spelling,
-  and clarity. The result is shown as a preview with **Accept**/**Discard**
-  before it ever replaces your note — nothing is overwritten automatically.
-  See "Notes are private to you" below for the privacy trade-off this makes.
-- **Kanban shortcut** — `Edit > Edit notes` on a kanban card opens the same
-  editor (toolbar, AI button included) in a fixed-size modal — the modal
-  itself never grows as you type; the editor scrolls internally instead.
+  It renders `host.ui.RichTextEditor`, the same TipTap-based WYSIWYG editor
+  the Plan panel uses: bold, italic, headings, bullet/numbered lists, links,
+  code blocks, and GFM checklists are all reachable through its selection
+  bubble menu and "/" slash commands — markdown in, markdown out, no
+  separate toolbar needed (the Plan panel has none either). Content
+  autosaves through host.storage, debounced.
+
+  The selection bubble menu also shows a purple "comment" icon inherited
+  from the Plan editor's internals — it is always rendered by
+  `TipTapPlanEditor` regardless of whether a caller wires up
+  `onSelectionChange`, and `host.ui.RichTextEditor`'s narrow plugin-facing
+  contract never does. Clicking it is a host-platform no-op for every
+  plugin that uses `host.ui.RichTextEditor`, not just this one, and there is
+  no prop to disable it — so this plugin hides it with a small scoped CSS
+  rule injected at startup (see `injectPluginStyles` in `ui/bundle.js`)
+  rather than shipping a dead button.
+- **Kanban shortcut** — `Edit > Edit notes` on a kanban card opens the note
+  in a fixed-size modal — the modal itself never grows as you type; the
+  editor scrolls internally instead. The modal uses a markdown `<textarea>`
+  with its own formatting toolbar (bold, italic, heading, bullet/numbered/
+  checklist lists, link, inline code, code block) rather than the rich
+  editor: `host.ui.RichTextEditor` depends on a `ToastProvider` ancestor
+  that the host's plugin-modal surface doesn't provide, so it cannot mount
+  there (a host-platform gap, not something this plugin can fix). The
+  toolbar's actions insert or wrap the right markdown around your current
+  selection (or at the caret) so you never have to remember the syntax —
+  including GFM task-list checkboxes (`- [ ] `) via the checklist button.
+
+  A **Preview** toggle next to "Enhance with AI" swaps the textarea for a
+  read-only rendered view of the same markdown (`host.ui.RichTextReadOnly`,
+  the Plan editor's read-only renderer) — headings, lists, checkboxes, code
+  blocks, and links rendered as they'll actually look, without the
+  `ToastProvider` dependency that blocks the fully-editable rich editor in
+  a modal. Checkboxes render but aren't clickable in Preview (the
+  underlying TipTap node view is read-only); toggle back to Edit to check
+  them off via the checklist syntax instead.
+
+- **Enhance with AI** — a button next to the toolbar/editor sends the note's
+  current markdown to your configured utility agent to proofread grammar,
+  spelling, and clarity. The result is shown as a preview with
+  **Accept**/**Discard** before it ever replaces your note — nothing is
+  overwritten automatically. See "Notes are private to you" below for the
+  privacy trade-off this makes.
 - **Card indicator** — a small glyph on cards that have a note.
 - **Cross-tab sync** — an edit in one tab shows up in another without a reload.
 

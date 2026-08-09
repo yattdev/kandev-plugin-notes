@@ -162,12 +162,14 @@ const {
   applyHeading,
   applyBulletList,
   applyNumberedList,
+  applyCheckboxList,
   applyLink,
   applyInlineCode,
   applyCodeBlock,
   enhanceNote,
   enhancePreviewReducer,
   initialEnhanceState,
+  injectPluginStyles,
 } = bundle;
 
 test("registers under the manifest's plugin id", () => {
@@ -264,12 +266,16 @@ test("AC11: the kanban modal surface uses the bare id 'note-modal' as its writer
   assert.equal(jsxCalls[0].props.surfaceId, "note-modal");
 });
 
-// The kanban modal surface shares the exact same markdown editor as the
-// task panel (see the file header and makeNoteModalContent's own comment):
-// there is no more editorKind/RichTextEditor branch. presentation: "modal"
-// is the only signal NotesEditor needs to give the modal its fixed-height
-// container (AC: fixed modal size with scrollable textarea) instead of the
-// panel's height: 100%.
+// The kanban modal surface renders the same NotesEditor component as the
+// task panel (see the file header and makeNoteModalContent's own comment)
+// — presentation: "modal" is the one prop that both (a) gives the modal its
+// fixed-height container (AC: fixed modal size with scrollable textarea)
+// instead of the panel's height: 100%, and (b) tells NotesEditor's own
+// internals to render the markdown textarea + toolbar instead of
+// host.ui.RichTextEditor (which cannot mount inside the host's
+// PluginModalHost — see makeNoteModalContent's comment). There is no
+// separate editorKind prop; the branch lives inside NotesEditor, keyed off
+// presentation alone.
 test("the kanban modal surface uses presentation 'modal', the same NotesEditor as the panel", () => {
   const { host, jsxCalls } = createFakeHost();
   const NoteModalContent = makeNoteModalContent(host, "task-42");
@@ -599,6 +605,68 @@ test("AC19: destroy() unsubscribes, clears the indicator cache, and clears pendi
   }
 });
 
+test("AC19: initialize() does not throw without a `document` global (the Node test env has none)", () => {
+  assert.equal(typeof document, "undefined");
+  const { host } = createFakeHost();
+  const registry = createFakeRegistry();
+  assert.doesNotThrow(() => registeredPlugin.initialize(registry, host));
+});
+
+// injectPluginStyles hides the dead "comment" bubble-menu button
+// host.ui.RichTextEditor inherits unconditionally from the Plan editor (see
+// the function's own comment in bundle.js for why it can never be wired up
+// to anything from a plugin). This is the framework-free half of that fix —
+// a minimal fake `document` stands in for jsdom, since the fix's only real
+// behavior (idempotent single <style> tag, correct selector text) needs no
+// full DOM.
+function createFakeDocument() {
+  const elementsById = new Map();
+  const head = {
+    appendChild(el) {
+      elementsById.set(el.id, el);
+    },
+  };
+  return {
+    head,
+    getElementById: (id) => elementsById.get(id) || null,
+    createElement: () => ({ id: "", textContent: "" }),
+  };
+}
+
+test("injectPluginStyles adds exactly one <style> tag scoped to kandev-notes-richtext, hiding the accent comment button", () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = createFakeDocument();
+  try {
+    injectPluginStyles();
+    const style = globalThis.document.getElementById("kandev-plugin-notes-styles");
+    assert.ok(style, "expected a style tag to be inserted");
+    assert.match(style.textContent, /\.kandev-notes-richtext/);
+    assert.match(style.textContent, /\.bg-primary\.text-primary-foreground/);
+    assert.match(style.textContent, /display:\s*none\s*!important/);
+  } finally {
+    globalThis.document = originalDocument;
+  }
+});
+
+test("injectPluginStyles is idempotent — calling it twice leaves exactly one style tag", () => {
+  const originalDocument = globalThis.document;
+  const fakeDoc = createFakeDocument();
+  globalThis.document = fakeDoc;
+  let createCount = 0;
+  const realCreateElement = fakeDoc.createElement;
+  fakeDoc.createElement = (...args) => {
+    createCount++;
+    return realCreateElement(...args);
+  };
+  try {
+    injectPluginStyles();
+    injectPluginStyles();
+    assert.equal(createCount, 1);
+  } finally {
+    globalThis.document = originalDocument;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Markdown transforms (AC3: toolbar actions insert/wrap the correct markdown
 // around the selection, or at the caret with no selection, and return an
@@ -749,6 +817,54 @@ test("applyNumberedList at a blank line inserts a marker for typing", () => {
   assert.equal(result.value, "before\n1. \nafter");
   assert.equal(result.selStart, caretOnBlankLine + 3);
   assert.equal(result.selEnd, caretOnBlankLine + 3);
+});
+
+// --- applyCheckboxList: GFM task-list toolbar button ----------------------
+
+test("applyCheckboxList prefixes every non-blank selected line with '- [ ] '", () => {
+  const text = "milk\neggs\nbread";
+  const result = applyCheckboxList(text, 0, text.length);
+  assert.equal(result.value, "- [ ] milk\n- [ ] eggs\n- [ ] bread");
+});
+
+test("applyCheckboxList toggles the marker back off when every line already has it", () => {
+  const text = "- [ ] milk\n- [x] eggs";
+  const result = applyCheckboxList(text, 0, text.length);
+  assert.equal(result.value, "milk\neggs");
+});
+
+test("applyCheckboxList at an empty note inserts a checkbox marker", () => {
+  const result = applyCheckboxList("", 0, 0);
+  assert.equal(result.value, "- [ ] ");
+  assert.equal(result.selStart, 6);
+  assert.equal(result.selEnd, 6);
+});
+
+test("applyCheckboxList at a blank line inserts a marker for typing", () => {
+  const text = "before\n\nafter";
+  const caretOnBlankLine = "before\n".length;
+  const result = applyCheckboxList(text, caretOnBlankLine, caretOnBlankLine);
+  assert.equal(result.value, "before\n- [ ] \nafter");
+  assert.equal(result.selStart, caretOnBlankLine + 6);
+  assert.equal(result.selEnd, caretOnBlankLine + 6);
+});
+
+test("applyCheckboxList skips blank lines within the selection", () => {
+  const text = "milk\n\nbread";
+  const result = applyCheckboxList(text, 0, text.length);
+  assert.equal(result.value, "- [ ] milk\n\n- [ ] bread");
+});
+
+test("applyCheckboxList inserts the checkbox marker right after an existing plain bullet", () => {
+  const text = "- milk\n- eggs";
+  const result = applyCheckboxList(text, 0, text.length);
+  assert.equal(result.value, "- [ ] milk\n- [ ] eggs");
+});
+
+test("applyCheckboxList at a bare caret (no selection) only affects that line", () => {
+  const text = "milk\neggs\nbread";
+  const result = applyCheckboxList(text, 4, 4);
+  assert.equal(result.value, "- [ ] milk\neggs\nbread");
 });
 
 // ---------------------------------------------------------------------------

@@ -7,16 +7,22 @@
 // (`make package` / `make package-host`).
 //
 // The plugin: a per-user, private scratchpad note on a task, edited as
-// markdown through one shared editor on both surfaces:
-//   - A task panel (registerTaskPanel, mobileEnabled) and
+// markdown on two surfaces:
+//   - A task panel (registerTaskPanel, mobileEnabled) — renders
+//     host.ui.RichTextEditor, the same TipTap-based WYSIWYG editor the Plan
+//     panel uses (markdown-in/markdown-out via tiptap-markdown, bold/
+//     italic/headings/lists/links/code blocks/checklists all reachable
+//     through its own bubble menu and "/" slash commands — no custom
+//     toolbar needed, mirroring how the Plan panel itself has none), and
 //   - a kanban card menu action (registerTaskMenuAction, group "edit") that
-//     opens the same editor in a modal, bound to that card's own taskId.
-//   Both render a scrollable markdown `<textarea>` with a formatting
-//   toolbar (bold/italic/heading/lists/link/code) above it, and autosave
-//   through host.storage. This editor intentionally does not use
-//   host.ui.RichTextEditor (see makeNoteModalContent's history below for
-//   why the modal surface could never use it) — one markdown editor keeps
-//   both surfaces byte-identical and needs no host WYSIWYG dependency.
+//     opens a modal, bound to that card's own taskId. The modal keeps a
+//     scrollable markdown `<textarea>` with its own formatting toolbar
+//     (bold/italic/heading/lists/link/code/checklist) instead, because
+//     host.ui.RichTextEditor cannot mount inside the host's PluginModalHost
+//     (see makeNoteModalContent's comment for the ToastProvider gap this
+//     hits — host-platform code this repo cannot change).
+//   Both surfaces autosave through host.storage on the same debounced,
+//   conflict-aware store.
 //   - A task-card-indicators component shows a glyph when the task has a
 //     non-empty note.
 //   - An "Enhance with AI" button (both surfaces) sends the note's current
@@ -200,6 +206,43 @@ export function applyNumberedList(text, selStart, selEnd) {
     if (allNumbered) return l.replace(numberRe, "");
     n += 1;
     return numberRe.test(l) ? l : `${n}. ${l}`;
+  });
+  const newBlock = newLines.join("\n");
+  const value = text.slice(0, start) + newBlock + text.slice(end);
+  const deltaFirstLine = newLines[0].length - lines[0].length;
+  const deltaTotal = newBlock.length - block.length;
+  return {
+    value,
+    selStart: Math.max(start, selStart + deltaFirstLine),
+    selEnd: Math.max(start, selEnd + deltaTotal),
+  };
+}
+
+// applyCheckboxList toggles a GFM task-list marker ("- [ ] ") on every
+// non-blank line the selection touches, mirroring applyBulletList's
+// "converges to all-listified in one click" idiom: toggling off requires
+// every non-blank line to already carry the checkbox marker, otherwise the
+// action adds it to whichever lines are missing it. A line that already has
+// a plain bullet ("- ") gets the checkbox inserted right after the dash
+// rather than double-prefixed, so "- item" becomes "- [ ] item".
+export function applyCheckboxList(text, selStart, selEnd) {
+  const { start, end } = lineRangeBounds(text, selStart, selEnd);
+  const block = text.slice(start, end);
+  if (selStart === selEnd && block.trim() === "") {
+    const marker = "- [ ] ";
+    const value = text.slice(0, start) + marker + block + text.slice(end);
+    return { value, selStart: selStart + marker.length, selEnd: selEnd + marker.length };
+  }
+  const lines = block.split("\n");
+  const checkboxRe = /^-\s+\[[ xX]\]\s+/;
+  const bulletOnlyRe = /^-\s+/;
+  const allChecked = lines.every((l) => checkboxRe.test(l) || l.trim() === "");
+  const newLines = lines.map((l) => {
+    if (l.trim() === "") return l;
+    if (allChecked) return l.replace(checkboxRe, "");
+    if (checkboxRe.test(l)) return l;
+    if (bulletOnlyRe.test(l)) return l.replace(bulletOnlyRe, (m) => `${m}[ ] `);
+    return `- [ ] ${l}`;
   });
   const newBlock = newLines.join("\n");
   const value = text.slice(0, start) + newBlock + text.slice(end);
@@ -631,11 +674,14 @@ export function disposeNoteIndicatorSubscription() {
 // "current task".
 //
 // presentation: "modal" gives NotesEditor its fixed-height container (see
-// below) — this was previously the surface that had to fall back to a plain
-// `<textarea>` because host.ui.RichTextEditor's ToastProvider dependency
-// isn't satisfied inside the host's PluginModalHost (a host-platform gap,
-// not fixable from this repo). Now that both surfaces share one markdown
-// editor, that gap no longer applies to either surface.
+// below) AND keeps it on the markdown-textarea-plus-toolbar editor rather
+// than host.ui.RichTextEditor (the real, Plan-panel-identical TipTap editor
+// NotesEditor uses for the "panel"/"mobile" surfaces below): RichTextEditor
+// internally calls useMermaidErrorToast, which requires a ToastProvider
+// ancestor, and the host's PluginModalHost (where this modal mounts) does
+// not render one — confirmed live (empty, uneditable modal body). That is
+// host-platform code this repo cannot change, so the modal keeps the
+// textarea+toolbar fallback until the host wraps plugin modals in one.
 // ---------------------------------------------------------------------------
 export function makeNoteModalContent(host, taskId) {
   return function NoteModalContent() {
@@ -687,7 +733,7 @@ function useNoteStore(host, { taskId, surfaceId }) {
 
 // TOOLBAR_ACTIONS drives MarkdownToolbar: each entry pairs a short glyph
 // label (this bundle ships no icon set — see bookGlyph's own comment on why
-// SVGs are hand-inlined elsewhere; plain glyphs are simpler for eight small
+// SVGs are hand-inlined elsewhere; plain glyphs are simpler for nine small
 // buttons) with the pure transform it applies to the textarea's current
 // selection.
 const TOOLBAR_ACTIONS = [
@@ -696,13 +742,14 @@ const TOOLBAR_ACTIONS = [
   { id: "heading", title: "Heading", glyph: "H", apply: (text, selStart, selEnd) => applyHeading(text, selStart, selEnd, 2) },
   { id: "bullet-list", title: "Bullet list", glyph: "\u2022\u2261", apply: applyBulletList },
   { id: "numbered-list", title: "Numbered list", glyph: "1.\u2261", apply: applyNumberedList },
+  { id: "checkbox-list", title: "Checklist", glyph: "\u2611", apply: applyCheckboxList },
   { id: "link", title: "Link", glyph: "\uD83D\uDD17", apply: applyLink },
   { id: "inline-code", title: "Inline code", glyph: "</>", apply: applyInlineCode },
   { id: "code-block", title: "Code block", glyph: "{ }", apply: applyCodeBlock },
 ];
 
 // MarkdownToolbar — the formatting toolbar (AC: bold, italic, heading,
-// bullet/numbered list, link, inline code, code block). Each button calls
+// bullet/numbered/checkbox list, link, inline code, code block). Each button calls
 // onAction(applyFn); NotesEditor's applyTransform runs applyFn against the
 // textarea's current selection and applies the resulting value/selection.
 function MarkdownToolbar({ host, onAction, disabled }) {
@@ -731,6 +778,42 @@ function MarkdownToolbar({ host, onAction, disabled }) {
   );
 }
 
+const STYLE_ELEMENT_ID = "kandev-plugin-notes-styles";
+
+// injectPluginStyles — a one-time <style> tag this plugin owns, scoped to
+// its own DOM via the "kandev-notes-richtext" class NotesEditor puts on
+// host.ui.RichTextEditor. It exists for exactly one rule: hiding the
+// TipTap Plan editor's comment ("speech bubble") bubble-menu button, which
+// host.ui.RichTextEditor inherits unconditionally.
+//
+// TipTapPlanEditor (the component RichTextEditor wraps) always renders
+// <PlanBubbleMenu onComment={handleBubbleComment} />, where
+// handleBubbleComment just forwards to props.onSelectionChange — it never
+// checks whether that prop is actually set. RichTextEditor's plugin-facing
+// contract (rich-text-editor.tsx) deliberately forwards only
+// {value, onChange, placeholder, className, testId}, NOT
+// onSelectionChange/onCommentClick/comments/onCommentDeleted, so plugins
+// have no way to wire the comment button up to anything — clicking it is a
+// silent no-op (Report: comment icon does nothing in the notes panel).
+// There is also no per-editor prop to ask TipTapPlanEditor to omit that
+// button. Both are host-platform code this repo cannot change; the button
+// itself is only reachable to hide via a CSS selector unique enough not to
+// hit anything else. `.bg-primary.text-primary-foreground` is exactly that:
+// grep confirms only ToggleButton's `accent` variant (used solely by the
+// comment button, see plan-bubble-menu.tsx) pairs those two classes inside
+// a Plan/RichTextEditor subtree.
+export function injectPluginStyles() {
+  // Node's `node --test` harness (ui/bundle.test.mjs) has no DOM — guard so
+  // initialize() stays callable there without a `document` global.
+  if (typeof document === "undefined") return;
+  if (document.getElementById(STYLE_ELEMENT_ID)) return;
+  const style = document.createElement("style");
+  style.id = STYLE_ELEMENT_ID;
+  style.textContent =
+    ".kandev-notes-richtext .bg-primary.text-primary-foreground { display: none !important; }";
+  document.head.appendChild(style);
+}
+
 function NotesEditor({ host, taskId, surfaceId, presentation }) {
   const { jsx: h, ui } = host;
   const React = host.React;
@@ -741,6 +824,13 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
 
   const isMobile = presentation === "mobile";
   const isModal = presentation === "modal";
+  // The panel/mobile surfaces use host.ui.RichTextEditor — the same TipTap
+  // editor the Plan panel renders (bold/italic/headings/lists/links/code
+  // blocks/checklists all built in via its own bubble menu + "/" slash
+  // commands, no custom toolbar needed). The kanban modal surface cannot:
+  // see makeNoteModalContent's comment for why (ToastProvider gap in
+  // PluginModalHost) — it keeps the markdown textarea + MarkdownToolbar.
+  const useRichEditor = !isModal;
   const containerStyle = isModal
     ? // Fixed height (not a min-height) so the modal itself stops growing as
       // content is typed — the editor below scrolls internally instead
@@ -762,6 +852,51 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
       pendingSelectionRef.current = null;
     }
   });
+
+  // RichTextEditor (see rich-text-editor.tsx) only consumes its `value` prop
+  // as the TipTap editor's *initial* content — like the Plan panel, there is
+  // no effect syncing later `value` changes into an already-mounted editor.
+  // The Plan panel's own fix for this is to bump a `key` (see
+  // task-plan-panel.tsx's `editorKey`) to force a remount whenever the
+  // content changes for a reason other than the editor's own onChange (a
+  // cross-tab sync refresh, or an accepted "Enhance with AI" preview) — this
+  // mirrors that pattern. lastRichValueRef tracks the value this editor
+  // instance already has, so the effect below can tell "my own onChange
+  // echoed back" (no remount, would cost the caret position) apart from "the
+  // value moved out from under me" (remount needed).
+  const [editorKey, setEditorKey] = React.useState(0);
+  const lastRichValueRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!useRichEditor || !snapshot || !snapshot.loaded) return;
+    if (lastRichValueRef.current === null) {
+      lastRichValueRef.current = snapshot.value;
+      return;
+    }
+    if (snapshot.value !== lastRichValueRef.current) {
+      lastRichValueRef.current = snapshot.value;
+      setEditorKey((k) => k + 1);
+    }
+  }, [useRichEditor, snapshot && snapshot.loaded, snapshot && snapshot.value]);
+
+  // The modal's markdown textarea has no live rendering of its own (unlike
+  // the panel's RichTextEditor, which renders WYSIWYG as you type) — a
+  // "Preview" toggle lets the user see checkboxes/headings/lists/links/code
+  // blocks rendered the same way the panel shows them, via
+  // host.ui.RichTextReadOnly (PlanReadOnlyMarkdown under the hood). That
+  // component is safe to mount inside the modal where the fully-editable
+  // RichTextEditor is not (see makeNoteModalContent's comment): it is
+  // `editable: false` and never calls useMermaidErrorToast, so it has no
+  // ToastProvider dependency. It only *renders* markdown, though — TipTap's
+  // TaskItem checkbox stays inert while editable: false, so toggling a
+  // checkbox still has to happen in the textarea (typing "x" inside
+  // `[ ]`) or via the Checklist toolbar button, not by clicking the
+  // rendered preview.
+  const [showPreview, setShowPreview] = React.useState(false);
+
+  function handleRichTextChange(next) {
+    lastRichValueRef.current = next;
+    store.setValue(next);
+  }
 
   if (!snapshot) {
     return h("div", { style: containerStyle }, "Loading notes…");
@@ -856,6 +991,23 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
       : h("span", null, "\u2728 Enhance with AI"),
   );
 
+  const previewToggleButton = isModal
+    ? h(
+        ui.Button,
+        {
+          type: "button",
+          variant: showPreview ? "secondary" : "ghost",
+          size: "sm",
+          onClick: () => setShowPreview((v) => !v),
+          "data-testid": "notes-preview-toggle",
+          title: showPreview
+            ? "Back to editing"
+            : "Preview — see checkboxes, headings, lists, links, and code blocks rendered",
+        },
+        showPreview ? "Edit" : "Preview",
+      )
+    : null;
+
   const enhancePreview =
     enhanceState.status === "preview"
       ? h(
@@ -938,24 +1090,58 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
         style: {
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
           gap: "0.5rem",
           marginBottom: "0.5rem",
           flexWrap: "wrap",
         },
       },
-      h(MarkdownToolbar, { host, onAction: applyTransform, disabled: isEnhancing }),
-      enhanceButton,
+      // The rich editor (panel/mobile) needs no custom toolbar — bold,
+      // italic, headings, lists, links, code blocks and checklists are all
+      // reachable through its own bubble menu (on selection) and "/" slash
+      // commands, exactly like the Plan panel. Only the modal's plain
+      // textarea needs MarkdownToolbar's buttons, and only while not
+      // previewing (the preview has nothing to apply a selection-based
+      // transform to).
+      useRichEditor || showPreview
+        ? null
+        : h(MarkdownToolbar, { host, onAction: applyTransform, disabled: isEnhancing }),
+      h(
+        "div",
+        { style: { display: "flex", gap: "0.25rem", marginLeft: "auto" } },
+        previewToggleButton,
+        enhanceButton,
+      ),
     ),
-    h(ui.Textarea, {
-      ref: textareaRef,
-      value: snapshot.value,
-      onChange: (e) => store.setValue(e.target.value),
-      placeholder: "Jot a note about this task… (Markdown supported)",
-      className: "flex-1 min-h-0 resize-none text-sm leading-relaxed font-mono",
-      style: { overflowY: "auto" },
-      "data-testid": isModal ? "notes-modal-editor" : "notes-panel-editor",
-    }),
+    useRichEditor
+      ? h(ui.RichTextEditor, {
+          key: `${surfaceId}-${taskId}-${editorKey}`,
+          taskId,
+          value: snapshot.value,
+          onChange: handleRichTextChange,
+          placeholder: "Jot a note about this task… (Markdown supported)",
+          // kandev-notes-richtext: scopes the CSS rule (injected once by
+          // injectPluginStyles, see below) that hides the dead "comment"
+          // bubble-menu button host.ui.RichTextEditor inherits from the
+          // Plan editor — see that function's own comment for why it can
+          // never work here and can't be fixed by omitting a prop.
+          className: "flex-1 min-h-0 kandev-notes-richtext",
+          testId: "notes-panel-editor",
+        })
+      : showPreview
+        ? h(ui.RichTextReadOnly, {
+            value: snapshot.value,
+            className: "flex-1 min-h-0 overflow-y-auto border rounded-md",
+            testId: "notes-modal-preview",
+          })
+        : h(ui.Textarea, {
+            ref: textareaRef,
+            value: snapshot.value,
+            onChange: (e) => store.setValue(e.target.value),
+            placeholder: "Jot a note about this task… (Markdown supported)",
+            className: "flex-1 min-h-0 resize-none text-sm leading-relaxed font-mono",
+            style: { overflowY: "auto" },
+            "data-testid": "notes-modal-editor",
+          }),
     enhancePreview,
     enhanceError,
     status,
@@ -1065,6 +1251,7 @@ export function openNoteModal(host, taskId, taskTitle) {
 window.registerKandevPlugin("kandev-plugin-notes", {
   initialize(registry, host) {
     initNoteIndicatorSubscription(host);
+    injectPluginStyles();
 
     registry.registerTaskPanel({
       id: "notes",
