@@ -118,12 +118,36 @@ function createFakeRegistry() {
   };
 }
 
+// createFakeApi returns a host.api double whose fetch() calls resolve/reject
+// on demand, matching createFakeStorage's deferred-call style — used by the
+// read-error diagnostic probe (AC3), which issues its own host.api.fetch
+// independent of host.storage.get.
+function createFakeApi() {
+  const calls = [];
+
+  function fetch(path, init) {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const call = { path, init, promise, resolve, reject };
+    calls.push(call);
+    return promise;
+  }
+
+  return { api: { fetch }, apiCalls: calls };
+}
+
 function createFakeHost() {
   const { storage, calls, subscribers, emit, callsOf } = createFakeStorage();
+  const { api, apiCalls } = createFakeApi();
   const { jsx, calls: jsxCalls } = createJsxSpy();
   const openModalCalls = [];
   const host = {
     storage,
+    api,
     jsx,
     React: null,
     openModal: (options) => {
@@ -132,7 +156,7 @@ function createFakeHost() {
     },
     ui: {},
   };
-  return { host, storageCalls: calls, subscribers, emit, callsOf, jsxCalls, openModalCalls };
+  return { host, storageCalls: calls, subscribers, emit, callsOf, apiCalls, jsxCalls, openModalCalls };
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +174,7 @@ globalThis.registerKandevPlugin = (id, plugin) => {
 const bundle = await import("../ui/bundle.js");
 const {
   createNoteStore,
+  describeReadError,
   markNote,
   getCachedHasNote,
   subscribeCache,
@@ -387,8 +412,216 @@ test("AC14: a failed get leaves the store unloaded, in an explicit retry state",
 
   const snapshot = store.getSnapshot();
   assert.equal(snapshot.loaded, false);
-  assert.equal(snapshot.readError, true);
+  assert.notEqual(snapshot.readError, true, "readError must never be a bare boolean (AC2)");
+  assert.equal(typeof snapshot.readError, "object");
+  assert.equal(snapshot.readError.message, "Could not load this note.");
+  assert.equal(snapshot.readError.detail, "network error");
+  assert.equal(snapshot.readError.retryable, false);
   store.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// describeReadError — classifies a rejected host.storage.get() (AC1).
+// ---------------------------------------------------------------------------
+
+test("describeReadError: status 403 maps to a non-retryable capability message", () => {
+  const result = describeReadError(new Error("plugin storage: get failed with status 403"));
+  assert.equal(result.status, 403);
+  assert.equal(result.retryable, false);
+  assert.match(result.message, /storage access/);
+  assert.equal(result.detail, "plugin storage: get failed with status 403");
+});
+
+test("describeReadError: status 401 maps to a non-retryable session message", () => {
+  const result = describeReadError(new Error("plugin storage: get failed with status 401"));
+  assert.equal(result.status, 401);
+  assert.equal(result.retryable, false);
+  assert.match(result.message, /session/);
+});
+
+test("describeReadError: status 500 maps to a retryable server-error message", () => {
+  const result = describeReadError(new Error("plugin storage: get failed with status 500"));
+  assert.equal(result.status, 500);
+  assert.equal(result.retryable, true);
+});
+
+test("describeReadError: status 400 maps to a non-retryable invalid-request message", () => {
+  const result = describeReadError(new Error("plugin storage: get failed with status 400"));
+  assert.equal(result.status, 400);
+  assert.equal(result.retryable, false);
+});
+
+test("describeReadError: a TypeError with no parseable status is classified as retryable connectivity", () => {
+  const result = describeReadError(new TypeError("Failed to fetch"));
+  assert.equal(result.status, undefined);
+  assert.equal(result.retryable, true);
+  assert.match(result.message, /connection|reach/);
+  assert.equal(result.detail, "Failed to fetch");
+});
+
+test("describeReadError: anything else falls back to a generic, non-retryable message carrying the raw detail", () => {
+  const result = describeReadError(new Error("boom"));
+  assert.equal(result.status, undefined);
+  assert.equal(result.retryable, false);
+  assert.equal(result.detail, "boom");
+});
+
+// ---------------------------------------------------------------------------
+// Read-error diagnostics — probe, auto-retry, no-write guard (AC2-AC4, AC6, AC7).
+// ---------------------------------------------------------------------------
+
+test("AC2: readError is null while loaded, never a bare boolean", async () => {
+  const { host, callsOf } = createFakeHost();
+  const store = createNoteStore(host, { taskId: "t1", surfaceId: "panel-1" });
+  assert.equal(store.getSnapshot().readError, null);
+
+  callsOf("get")[0].resolve(undefined);
+  await flush();
+  assert.equal(store.getSnapshot().readError, null);
+  store.dispose();
+});
+
+test("AC3: a rejected read issues exactly one diagnostic probe and folds its status/body into readError", async () => {
+  const { host, callsOf, apiCalls } = createFakeHost();
+  const store = createNoteStore(host, { taskId: "t1", surfaceId: "panel-1" });
+  callsOf("get")[0].reject(new Error("boom"));
+  await flush();
+
+  assert.equal(apiCalls.length, 1, "exactly one probe request");
+  assert.equal(apiCalls[0].path, "user-state/task/t1/note");
+
+  apiCalls[0].resolve({ status: 500, json: async () => ({ error: "user state store not configured" }) });
+  await flush();
+
+  const snapshot = store.getSnapshot();
+  assert.equal(snapshot.readError.status, 500);
+  assert.equal(snapshot.readError.detail, "status 500: user state store not configured");
+  store.dispose();
+});
+
+test("AC3: no probe is issued when the read succeeds", async () => {
+  const { host, callsOf, apiCalls } = createFakeHost();
+  const store = createNoteStore(host, { taskId: "t1", surfaceId: "panel-1" });
+  callsOf("get")[0].resolve(undefined);
+  await flush();
+
+  assert.equal(apiCalls.length, 0);
+  store.dispose();
+});
+
+test("AC3: a probe that itself fails degrades gracefully to the describeReadError classification", async () => {
+  const { host, callsOf, apiCalls } = createFakeHost();
+  const store = createNoteStore(host, { taskId: "t1", surfaceId: "panel-1" });
+  callsOf("get")[0].reject(new Error("plugin storage: get failed with status 403"));
+  await flush();
+
+  apiCalls[0].reject(new TypeError("Failed to fetch"));
+  await flush();
+
+  const snapshot = store.getSnapshot();
+  assert.equal(snapshot.readError.status, 403, "keeps the original classification's status");
+  assert.equal(snapshot.readError.retryable, false);
+  store.dispose();
+});
+
+test("AC4: a rejected read blocks writes — setValue while readError is set issues no host.storage.set", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const { host, callsOf } = createFakeHost();
+    const store = createNoteStore(host, { taskId: "t1", surfaceId: "panel-1" });
+    callsOf("get")[0].reject(new Error("boom"));
+    await flush();
+    assert.ok(store.getSnapshot().readError);
+
+    store.setValue("typed while broken");
+    mock.timers.tick(1000);
+    await flush();
+
+    assert.equal(callsOf("set").length, 0, "no write escapes an errored read");
+    store.dispose();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AC6: a retryable failure auto-retries up to 3 times with backoff, then rests on manual Retry", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const { host, callsOf } = createFakeHost();
+    const store = createNoteStore(host, { taskId: "t1", surfaceId: "panel-1" });
+
+    callsOf("get")[0].reject(new Error("plugin storage: get failed with status 500"));
+    await flush();
+    assert.equal(callsOf("get").length, 1);
+
+    mock.timers.tick(1000);
+    await flush();
+    assert.equal(callsOf("get").length, 2, "1st auto-retry");
+    callsOf("get")[1].reject(new Error("plugin storage: get failed with status 500"));
+    await flush();
+
+    mock.timers.tick(2000);
+    await flush();
+    assert.equal(callsOf("get").length, 3, "2nd auto-retry");
+    callsOf("get")[2].reject(new Error("plugin storage: get failed with status 500"));
+    await flush();
+
+    mock.timers.tick(4000);
+    await flush();
+    assert.equal(callsOf("get").length, 4, "3rd auto-retry");
+    callsOf("get")[3].reject(new Error("plugin storage: get failed with status 500"));
+    await flush();
+
+    mock.timers.tick(60_000);
+    await flush();
+    assert.equal(callsOf("get").length, 4, "auto-retry budget exhausted — no further automatic attempts");
+
+    store.retryRead();
+    await flush();
+    assert.equal(callsOf("get").length, 5, "manual Retry still works after the budget is exhausted");
+    store.dispose();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AC6: a non-retryable failure (403) never auto-retries", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const { host, callsOf } = createFakeHost();
+    const store = createNoteStore(host, { taskId: "t1", surfaceId: "panel-1" });
+
+    callsOf("get")[0].reject(new Error("plugin storage: get failed with status 403"));
+    await flush();
+
+    mock.timers.tick(60_000);
+    await flush();
+    assert.equal(callsOf("get").length, 1, "no automatic retry for a non-retryable failure");
+    store.dispose();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AC7: each distinct read failure emits exactly one console.warn carrying the raw error and probe status", async () => {
+  const warn = mock.method(console, "warn", () => {});
+  try {
+    const { host, callsOf, apiCalls } = createFakeHost();
+    const store = createNoteStore(host, { taskId: "t1", surfaceId: "panel-1" });
+    const rawError = new Error("plugin storage: get failed with status 500");
+    callsOf("get")[0].reject(rawError);
+    await flush();
+    apiCalls[0].resolve({ status: 500, json: async () => ({}) });
+    await flush();
+
+    assert.equal(warn.mock.calls.length, 1);
+    assert.equal(warn.mock.calls[0].arguments[0], "[kandev-plugin-notes] failed to load note");
+    assert.equal(warn.mock.calls[0].arguments[1], rawError);
+    assert.equal(warn.mock.calls[0].arguments[2], 500);
+    store.dispose();
+  } finally {
+    warn.mock.restore();
+  }
 });
 
 // --- AC15: generation counter + synchronous taskId switch ------------------

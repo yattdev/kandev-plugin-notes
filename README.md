@@ -54,6 +54,26 @@ editor and optional AI-assisted proofreading.
 - **Card indicator** — a small glyph on cards that have a note.
 - **Cross-tab sync** — an edit in one tab shows up in another without a reload.
 
+## If a note won't load
+
+Both entry points (the task panel and the kanban "Edit notes" shortcut) read
+the note through the same store, so a load failure looks the same everywhere:
+a short message plus a muted detail line and a **Retry** button, instead of
+the editor. The message tells you what to do next:
+
+- **"Your session could not be verified."** / **"...storage access is
+  disabled..."** — not retried automatically; reload the page, or ask an
+  admin to check the plugin's capabilities under Settings > Plugins.
+- **"The server had a problem loading this note."** / **"Could not reach the
+  server..."** — retried automatically (up to 3 attempts with backoff)
+  before falling back to the manual Retry button.
+- Anything else — a generic message with the raw detail underneath; use
+  Retry, and if it persists, that detail line is what to include in a bug
+  report.
+
+Typing is disabled while a note fails to load — an empty editor here could
+otherwise save over an existing note the read never actually saw.
+
 ## Notes are private to you — except when you ask AI to enhance one
 
 Each note is stored per **user**, per **task**, under the plugin's own key

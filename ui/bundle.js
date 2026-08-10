@@ -339,6 +339,67 @@ export function enhancePreviewReducer(state, action) {
 }
 
 // ---------------------------------------------------------------------------
+// describeReadError — classifies a rejected host.storage.get() into a
+// snapshot-safe shape ({ status, message, retryable, detail }) so the read
+// path can surface *something* diagnosable instead of one fixed "Could not
+// load this note." for every failure mode. host.storage.get (see
+// apps/web/lib/plugins/host-api.ts) throws a plain Error whose message ends
+// "status <code>" for a non-2xx/non-404 response, or a TypeError (e.g.
+// "Failed to fetch") when the request itself never reached the server —
+// there is no structured error.status to read directly, hence the regex.
+// This mirrors enhanceNote's status-driven classification above (its 412
+// case is the precedent), but for the read path there is no Response object
+// to inspect — only the message text — which is exactly what the one-shot
+// probe in createNoteStore exists to make up for.
+// ---------------------------------------------------------------------------
+const READ_ERROR_COPY = {
+  401: {
+    message: "Your session could not be verified. Try reloading the page.",
+    retryable: false,
+  },
+  403: {
+    message:
+      "This plugin's storage access is disabled on this kandev instance. Ask an administrator to check its capability settings.",
+    retryable: false,
+  },
+  400: {
+    message: "This note's request was rejected by the server as invalid.",
+    retryable: false,
+  },
+};
+
+export function describeReadError(error) {
+  const message = error && typeof error.message === "string" ? error.message : String(error);
+  const statusMatch = message.match(/status (\d{3})/);
+  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+
+  if (status !== undefined) {
+    const copy = READ_ERROR_COPY[status];
+    if (copy) return { status, message: copy.message, retryable: copy.retryable, detail: message };
+    if (status >= 500) {
+      return {
+        status,
+        message: "The server had a problem loading this note.",
+        retryable: true,
+        detail: message,
+      };
+    }
+    return { status, message: "Could not load this note.", retryable: false, detail: message };
+  }
+
+  if (error instanceof TypeError) {
+    return {
+      status: undefined,
+      message: "Could not reach the server. Check your connection and try again.",
+      retryable: true,
+      detail: message,
+    };
+  }
+
+  return { status: undefined, message: "Could not load this note.", retryable: false, detail: message };
+}
+
+// ---------------------------------------------------------------------------
 // createNoteStore — a single task's note, independent of any UI framework.
 //
 // Guards ported from docs/public/plugins-authoring.md recipe #3 ("Task panel
@@ -365,7 +426,7 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
   let value = "";
   let updatedAt;
   let loadedTaskId = null;
-  let readError = false;
+  let readError = null;
   let dirty = false;
   let conflict = false;
   let writeError = false;
@@ -378,6 +439,81 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
   let refreshGeneration = 0;
   let disposed = false;
   let unsubscribeStorage = null;
+
+  // Auto-retry (AC6): a `retryable` classification (describeReadError) gets
+  // up to AUTO_RETRY_LIMIT automatic attempts with exponential backoff
+  // before resting on the user's manual Retry button. Non-retryable
+  // failures (401/403, or anything the probe can't improve on) never
+  // schedule one. Reused/cleared on every successful refresh and on
+  // setTaskId — a new task, or a working read, gets a fresh budget.
+  const AUTO_RETRY_LIMIT = 3;
+  const AUTO_RETRY_BASE_MS = 1000;
+  let autoRetryCount = 0;
+  let autoRetryTimer;
+
+  function clearAutoRetryTimer() {
+    if (autoRetryTimer !== undefined) {
+      clearTimeout(autoRetryTimer);
+      autoRetryTimer = undefined;
+    }
+  }
+
+  function scheduleAutoRetry(forTaskId) {
+    if (!readError || !readError.retryable) return;
+    if (autoRetryCount >= AUTO_RETRY_LIMIT) return;
+    autoRetryCount += 1;
+    const delay = AUTO_RETRY_BASE_MS * 2 ** (autoRetryCount - 1);
+    autoRetryTimer = setTimeout(() => {
+      autoRetryTimer = undefined;
+      if (disposed || forTaskId !== currentTaskId) return;
+      refresh();
+    }, delay);
+  }
+
+  // issueReadErrorProbe (AC3): the rejection that drives describeReadError
+  // carries only a message string (host.storage.get throws a plain Error,
+  // see describeReadError's own comment) — this probe re-issues the same
+  // logical read as a raw host.api.fetch so the snapshot can carry the real
+  // response.status and any JSON error body instead of a regex guess. Fires
+  // at most once per rejected refresh(); a probe for a superseded
+  // generation/taskId is dropped by the same guard refresh() itself uses,
+  // and a probe that itself fails just leaves the describeReadError
+  // classification in place.
+  function issueReadErrorProbe(rawError, generation, forTaskId) {
+    const fetchApi = host.api && host.api.fetch;
+    const probe =
+      typeof fetchApi === "function"
+        ? Promise.resolve(fetchApi(`user-state/${NOTE_SCOPE}/${forTaskId}/${NOTE_KEY}`)).then(
+            async (response) => {
+              let body = null;
+              try {
+                body = await response.json();
+              } catch {
+                body = null;
+              }
+              const backendMessage = body && typeof body.error === "string" ? body.error : undefined;
+              return {
+                status: response.status,
+                detail: backendMessage ? `status ${response.status}: ${backendMessage}` : `status ${response.status}`,
+              };
+            },
+            () => undefined,
+          )
+        : Promise.resolve(undefined);
+
+    probe.then((probeInfo) => {
+      if (!disposed && generation === refreshGeneration && forTaskId === currentTaskId && probeInfo) {
+        readError = { ...readError, status: probeInfo.status, detail: probeInfo.detail };
+        notify();
+      }
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[kandev-plugin-notes] failed to load note",
+        rawError,
+        probeInfo ? probeInfo.status : undefined,
+      );
+    });
+  }
 
   const listeners = new Set();
   function notify() {
@@ -408,17 +544,21 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
         if (!preserveValue && !dirty) value = entry ? entry.value : "";
         updatedAt = entry ? entry.updatedAt : undefined;
         loadedTaskId = forTaskId;
-        readError = false;
+        readError = null;
+        autoRetryCount = 0;
+        clearAutoRetryTimer();
         notify();
         return true;
       },
-      () => {
+      (rawError) => {
         // Do not mark the task loaded after a rejected read: an empty
         // editor here could omit ifUnmodifiedSince on its first save and
         // silently overwrite an existing note. Stay in a retry state.
         if (disposed || generation !== refreshGeneration || forTaskId !== currentTaskId) return false;
-        readError = true;
+        readError = describeReadError(rawError);
         notify();
+        scheduleAutoRetry(forTaskId);
+        issueReadErrorProbe(rawError, generation, forTaskId);
         return false;
       },
     );
@@ -452,7 +592,9 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
     value = "";
     updatedAt = undefined;
     loadedTaskId = null;
-    readError = false;
+    readError = null;
+    autoRetryCount = 0;
+    clearAutoRetryTimer();
     dirty = false;
     resetWriteState();
     notify();
@@ -474,7 +616,10 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
   }
 
   function flushWrite() {
-    if (writeBlocked || writeInFlight || pendingValue === undefined) return;
+    // AC4: a rejected read must never permit a write — an empty/stale
+    // editor value saved under readError could silently overwrite an
+    // existing note (see refresh()'s reject handler above).
+    if (writeBlocked || writeInFlight || pendingValue === undefined || readError) return;
     const generation = writeGeneration;
     const forTaskId = currentTaskId;
     const next = pendingValue;
@@ -543,6 +688,7 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
   function dispose() {
     disposed = true;
     if (unsubscribeStorage) unsubscribeStorage();
+    clearAutoRetryTimer();
     resetWriteState();
     activeStores.delete(store);
   }
@@ -902,10 +1048,18 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
     return h("div", { style: containerStyle }, "Loading notes…");
   }
   if (snapshot.readError) {
+    const { message, detail } = snapshot.readError;
     return h(
       "div",
       { style: containerStyle },
-      h("p", null, "Could not load this note."),
+      h("p", null, message || "Could not load this note."),
+      detail
+        ? h(
+            "p",
+            { style: { fontSize: "0.75rem", color: "var(--muted-foreground)" } },
+            detail,
+          )
+        : null,
       h(
         "button",
         { type: "button", onClick: () => store.retryRead(), style: { cursor: "pointer" } },
