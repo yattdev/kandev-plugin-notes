@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2] - 2026-08-10
+
+### Changed
+
+- fix: diagnose and surface note read failures instead of a dead retry loop (a06ec3f)
+
+
 ## [0.2.1] - 2026-08-10
 
 ### Changed
