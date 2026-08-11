@@ -190,6 +190,8 @@ func TestHandleWebhook_Enhance_NoUtilityAgentConfigured_ReturnsPreconditionFaile
 	var out enhanceErrorBody
 	require.NoError(t, json.Unmarshal(resp.Body, &out))
 	require.NotEmpty(t, out.Error)
+	require.Equal(t, enhanceErrorCodeAgentUnset, out.Code)
+	require.Equal(t, "no utility agent configured for this plugin", out.Detail)
 }
 
 func TestHandleWebhook_Enhance_OtherAgentError_ReturnsBadGateway(t *testing.T) {
@@ -208,4 +210,89 @@ func TestHandleWebhook_Enhance_OtherAgentError_ReturnsBadGateway(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, int32(502), resp.Status)
+
+	// C3: a real execution failure must never turn into a configuration
+	// message — no code/detail leak onto this generic branch.
+	var out enhanceErrorBody
+	require.NoError(t, json.Unmarshal(resp.Body, &out))
+	require.Empty(t, out.Code)
+	require.Empty(t, out.Detail)
+	require.Equal(t, "AI enhancement failed", out.Error)
+}
+
+// TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording is C1/C7:
+// each of host_utility.go's three distinguishable wordings, plus an
+// unrecognized one, maps to its own code with the raw message preserved
+// verbatim as Detail.
+func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testing.T) {
+	tests := []struct {
+		name        string
+		hostMessage string
+		wantCode    enhanceErrorCode
+	}{
+		{
+			name:        "unset",
+			hostMessage: "no utility agent configured for this plugin",
+			wantCode:    enhanceErrorCodeAgentUnset,
+		},
+		{
+			name:        "missing",
+			hostMessage: `configured utility agent "builtin-enhance-prompt" not found`,
+			wantCode:    enhanceErrorCodeAgentMissing,
+		},
+		{
+			name:        "disabled",
+			hostMessage: `configured utility agent "builtin-enhance-prompt" is disabled`,
+			wantCode:    enhanceErrorCodeAgentDisabled,
+		},
+		{
+			name:        "unrecognized wording degrades to unavailable, not a wrong instruction",
+			hostMessage: "utility agent invocation is temporarily throttled",
+			wantCode:    enhanceErrorCodeAgentUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &notesPlugin{}
+			p.SetHost(&fakeHost{invokeUtilityAgent: func(context.Context, string) (string, error) {
+				return "", status.Error(codes.FailedPrecondition, tt.hostMessage)
+			}})
+
+			body, err := json.Marshal(map[string]string{"content": "hello"})
+			require.NoError(t, err)
+
+			resp, err := p.HandleWebhook(context.Background(), &pluginsdk.WebhookRequest{
+				WebhookKey: "enhance",
+				Method:     "POST",
+				Body:       body,
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(412), resp.Status)
+
+			var out enhanceErrorBody
+			require.NoError(t, json.Unmarshal(resp.Body, &out))
+			require.Equal(t, tt.wantCode, out.Code)
+			require.Equal(t, tt.hostMessage, out.Detail)
+			require.Equal(t, enhanceErrorMessages[tt.wantCode], out.Error)
+		})
+	}
+}
+
+// TestClassifyUtilityAgentError_TableDriven exercises classifyUtilityAgentError
+// directly, isolated from HandleWebhook and the gRPC status plumbing.
+func TestClassifyUtilityAgentError_TableDriven(t *testing.T) {
+	tests := []struct {
+		message string
+		want    enhanceErrorCode
+	}{
+		{"no utility agent configured for this plugin", enhanceErrorCodeAgentUnset},
+		{`configured utility agent "x" not found`, enhanceErrorCodeAgentMissing},
+		{`configured utility agent "x" is disabled`, enhanceErrorCodeAgentDisabled},
+		{"", enhanceErrorCodeAgentUnavailable},
+		{"something else entirely", enhanceErrorCodeAgentUnavailable},
+	}
+	for _, tt := range tests {
+		require.Equal(t, tt.want, classifyUtilityAgentError(tt.message), "message: %q", tt.message)
+	}
 }
