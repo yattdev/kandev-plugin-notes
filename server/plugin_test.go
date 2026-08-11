@@ -221,9 +221,8 @@ func TestHandleWebhook_Enhance_OtherAgentError_ReturnsBadGateway(t *testing.T) {
 }
 
 // TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording is C1/C7:
-// each of host_utility.go's three distinguishable wordings, plus an
-// unrecognized one, maps to its own code with the raw message preserved
-// verbatim as Detail.
+// each of host_utility.go's classified wordings, plus unclassified ones, maps
+// to a code with the raw message preserved verbatim as Detail.
 func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -250,6 +249,16 @@ func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testin
 			hostMessage: "utility agent invocation is temporarily throttled",
 			wantCode:    enhanceErrorCodeAgentUnavailable,
 		},
+		{
+			// host_utility.go:84 — reachable by following the README's own
+			// two-step setup: agent selected AND enabled, but the profile
+			// binding left at its shipped default (every builtin utility
+			// agent starts with an empty agent_profile_id). Confirmed live
+			// against a real host during QA.
+			name:        "enabled agent with no bound profile",
+			hostMessage: `configured utility agent "builtin-enhance-prompt" has no usable agent profile`,
+			wantCode:    enhanceErrorCodeAgentUnavailable,
+		},
 	}
 
 	for _, tt := range tests {
@@ -274,9 +283,39 @@ func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testin
 			require.NoError(t, json.Unmarshal(resp.Body, &out))
 			require.Equal(t, tt.wantCode, out.Code)
 			require.Equal(t, tt.hostMessage, out.Detail)
-			require.Equal(t, enhanceErrorMessages[tt.wantCode], out.Error)
+			require.Equal(t, enhanceErrorMessage(tt.wantCode, tt.hostMessage), out.Error)
+
+			// An unclassified cause must not prescribe a settings page: the
+			// user may have already completed the step it would name. It
+			// carries the host's own wording instead.
+			if tt.wantCode == enhanceErrorCodeAgentUnavailable {
+				require.NotContains(t, out.Error, "Settings >")
+				require.Contains(t, out.Error, tt.hostMessage)
+			}
 		})
 	}
+}
+
+// TestEnhanceErrorMessage_UnavailableNamesNoPage pins the rule directly: every
+// classified code names exactly one remedy page, and agent_unavailable names
+// none. Without this, a later edit could quietly reintroduce a wrong-page
+// instruction for a cause the plugin cannot identify.
+func TestEnhanceErrorMessage_UnavailableNamesNoPage(t *testing.T) {
+	for _, code := range []enhanceErrorCode{
+		enhanceErrorCodeAgentUnset,
+		enhanceErrorCodeAgentMissing,
+		enhanceErrorCodeAgentDisabled,
+	} {
+		require.Contains(t, enhanceErrorMessage(code, "raw detail"), "Settings >",
+			"classified code %q must name its remedy page", code)
+	}
+
+	unavailable := enhanceErrorMessage(enhanceErrorCodeAgentUnavailable, "raw detail")
+	require.NotContains(t, unavailable, "Settings >")
+	require.Contains(t, unavailable, "raw detail")
+
+	// No detail to pass through: still no invented page.
+	require.NotContains(t, enhanceErrorMessage(enhanceErrorCodeAgentUnavailable, ""), "Settings >")
 }
 
 // TestClassifyUtilityAgentError_TableDriven exercises classifyUtilityAgentError

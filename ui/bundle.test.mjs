@@ -195,6 +195,7 @@ const {
   enhanceNote,
   enhancePreviewReducer,
   enhanceErrorAction,
+  notePlaceholderFor,
   initialEnhanceState,
   injectPluginStyles,
 } = bundle;
@@ -1471,4 +1472,19 @@ test("initialize() registers a sidebar-workspace-actions component (B4/B7 — in
   const registry = createFakeRegistry();
   registeredPlugin.initialize(registry, host);
   assert.ok(registry.registerComponentCalls.some((c) => c.slot === "sidebar-workspace-actions"));
+});
+
+// --- notePlaceholderFor: the editor names the thing the note is about ---
+
+test("workspace notes do not call the subject a task (QA regression)", () => {
+  const workspace = notePlaceholderFor("workspace");
+  assert.ok(!workspace.includes("task"), `workspace placeholder must not say "task": ${workspace}`);
+  assert.ok(workspace.includes("workspace"));
+});
+
+test("task notes keep their existing placeholder wording", () => {
+  const expected = "Jot a note about this task… (Markdown supported)";
+  assert.equal(notePlaceholderFor("task"), expected);
+  // Default scope: every pre-existing caller renders the task wording.
+  assert.equal(notePlaceholderFor(undefined), expected);
 });

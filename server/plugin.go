@@ -84,13 +84,29 @@ var enhanceErrorMessages = map[enhanceErrorCode]string{
 	enhanceErrorCodeAgentUnset:       "No utility agent is configured for this plugin — configure one in Settings > Plugins > Notes.",
 	enhanceErrorCodeAgentMissing:     "The utility agent configured for this plugin no longer exists — choose another one in Settings > Plugins > Notes.",
 	enhanceErrorCodeAgentDisabled:    "The utility agent configured for this plugin is disabled — enable it (with a model) in Settings > Utility Agents.",
-	enhanceErrorCodeAgentUnavailable: "The configured utility agent is unavailable — check Settings > Plugins > Notes.",
+	enhanceErrorCodeAgentUnavailable: "The configured utility agent is unavailable.",
 }
 
-// classifyUtilityAgentError maps host_utility.go's three distinguishable
-// FailedPrecondition wordings ("no utility agent configured for this
-// plugin", "configured utility agent %q not found", "configured utility
-// agent %q is disabled") to a stable code, kept as its own function (rather
+// enhanceErrorMessage resolves the user-facing message for a code. A
+// classified cause names the one page that fixes it. agent_unavailable is by
+// definition a FailedPrecondition this plugin could NOT classify, so there is
+// no page it can name without guessing — naming one anyway is how a user who
+// has already done that step gets sent back to it. It therefore surfaces the
+// host's own wording instead of a remedy that may not apply, which is the
+// degradation this classifier was designed for: a missing button, not a wrong
+// instruction.
+func enhanceErrorMessage(code enhanceErrorCode, detail string) string {
+	message := enhanceErrorMessages[code]
+	if code == enhanceErrorCodeAgentUnavailable && detail != "" {
+		return message + " The host reported: " + detail
+	}
+	return message
+}
+
+// classifyUtilityAgentError maps host_utility.go's FailedPrecondition
+// wordings ("no utility agent configured for this plugin", "configured
+// utility agent %q not found", "configured utility agent %q is disabled") to
+// a stable code, kept as its own function (rather
 // than inlined at the call site) so the mapping is unit-testable in
 // isolation and has exactly one home. Substring matching is coupled to the
 // host's current wording — a rephrase degrades to
@@ -167,7 +183,7 @@ func (p *notesPlugin) HandleWebhook(ctx context.Context, req *pluginsdk.WebhookR
 			rawMessage := status.Convert(err).Message()
 			code := classifyUtilityAgentError(rawMessage)
 			return jsonResponse(http.StatusPreconditionFailed, enhanceErrorBody{
-				Error:  enhanceErrorMessages[code],
+				Error:  enhanceErrorMessage(code, rawMessage),
 				Code:   code,
 				Detail: rawMessage,
 			})

@@ -17,6 +17,16 @@
   (`scope`/`scopeId` instead of a hardcoded "task"); existing task callers are
   unaffected (`taskId` remains a working alias)
 
+### Fixed
+
+- The `agent_unavailable` enhance failure no longer names Settings > Plugins >
+  Notes. That code means the plugin could not identify the cause, so naming a
+  page was a guess — and it sent users who had already completed that step
+  back to it. It now quotes the host's own wording instead. Reachable today by
+  selecting and enabling an agent while leaving its model/profile unbound
+- The workspace note editor no longer shows the task-scoped placeholder
+  ("Jot a note about this task…") under a modal titled "Workspace notes"
+
 ## [0.2.3] - 2026-08-11
 
 ### Changed

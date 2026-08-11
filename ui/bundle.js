@@ -1040,10 +1040,21 @@ export function injectPluginStyles() {
   document.head.appendChild(style);
 }
 
+// notePlaceholderFor names the thing the note is actually about. NotesEditor
+// renders for both scopes now, so a single hardcoded "about this task" reads
+// as wrong copy directly under a modal titled "Workspace notes — <label>".
+// Pure and exported so the wording is unit-testable without a DOM, like
+// enhanceErrorAction.
+export function notePlaceholderFor(scope) {
+  const subject = scope === "workspace" ? "workspace" : "task";
+  return `Jot a note about this ${subject}… (Markdown supported)`;
+}
+
 function NotesEditor({ host, scope = DEFAULT_SCOPE, scopeId, taskId, surfaceId, presentation, onCloseModal }) {
   const { jsx: h, ui } = host;
   const React = host.React;
   const resolvedScopeId = scopeId ?? taskId;
+  const notePlaceholder = notePlaceholderFor(scope);
   const { snapshot, store } = useNoteStore(host, { scope, scopeId: resolvedScopeId, surfaceId });
   const textareaRef = React.useRef(null);
   const pendingSelectionRef = React.useRef(null);
@@ -1379,7 +1390,7 @@ function NotesEditor({ host, scope = DEFAULT_SCOPE, scopeId, taskId, surfaceId, 
           taskId: resolvedScopeId,
           value: snapshot.value,
           onChange: handleRichTextChange,
-          placeholder: "Jot a note about this task… (Markdown supported)",
+          placeholder: notePlaceholder,
           // kandev-notes-richtext: scopes the CSS rule (injected once by
           // injectPluginStyles, see below) that hides the dead "comment"
           // bubble-menu button host.ui.RichTextEditor inherits from the
@@ -1398,7 +1409,7 @@ function NotesEditor({ host, scope = DEFAULT_SCOPE, scopeId, taskId, surfaceId, 
             ref: textareaRef,
             value: snapshot.value,
             onChange: (e) => store.setValue(e.target.value),
-            placeholder: "Jot a note about this task… (Markdown supported)",
+            placeholder: notePlaceholder,
             className: "flex-1 min-h-0 resize-none text-sm leading-relaxed font-mono",
             style: { overflowY: "auto" },
             "data-testid": "notes-modal-editor",
