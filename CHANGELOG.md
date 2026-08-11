@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0] - 2026-08-11
+
+### Added
+
+- feat: per-workspace notes — a sidebar button (registered for the host's
+  `sidebar-workspace-actions` slot, inert on hosts without it) opens the same
+  note editor/modal scoped to the active workspace instead of a task
+- feat: Enhance with AI now returns a stable, machine-readable failure code
+  (unset/missing/disabled/unavailable) and a guided-setup action button that
+  jumps to the correct settings page instead of one message for every cause
+
+### Changed
+
+- `createNoteStore` and the card-indicator cache are now scope-generic
+  (`scope`/`scopeId` instead of a hardcoded "task"); existing task callers are
+  unaffected (`taskId` remains a working alias)
+
 ## [0.2.3] - 2026-08-11
 
 ### Changed
