@@ -4,6 +4,11 @@ A [Kandev](https://github.com/kdlbs/kandev) plugin that gives every task a
 private markdown notes scratchpad, edited with a rich, Plan-panel-style
 editor and optional AI-assisted proofreading.
 
+## Demo
+
+[Screencast from 2026-08-10 20-08-31.webm](https://github.com/user-attachments/assets/65078214-dae5-4f71-a125-cb5863bc420f)
+
+
 ## What it does
 
 - **Notes task panel** — a dockview panel in the task workspace (`+` → Notes),
