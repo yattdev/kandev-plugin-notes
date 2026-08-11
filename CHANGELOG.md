@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3] - 2026-08-11
+
+### Changed
+
+- Update README.md to add demo screencast (5dabfdc)
+
+
 ## [0.2.2] - 2026-08-10
 
 ### Changed
