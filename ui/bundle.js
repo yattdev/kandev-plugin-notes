@@ -48,7 +48,11 @@
 // the operator-configured utility agent (README's Privacy section explains
 // this trade-off).
 
-const NOTE_SCOPE = "task";
+// DEFAULT_SCOPE is the store/cache default when no scope is given, keeping
+// every pre-existing task-scoped caller (panel, mobile panel, kanban modal,
+// card indicator) working unchanged. A workspace note passes scope:
+// "workspace" explicitly instead.
+const DEFAULT_SCOPE = "task";
 const NOTE_KEY = "note";
 const WRITE_DEBOUNCE_MS = 150;
 const ENHANCE_WEBHOOK_PATH = "webhooks/enhance";
@@ -289,7 +293,10 @@ export async function enhanceNote(host, content) {
     // 412 is this webhook's distinguishable "no utility agent configured"
     // signal (server/plugin.go, mapped from gRPC FailedPrecondition per
     // ADR 0048) — surfaced as a clear, non-fatal message rather than a
-    // generic failure.
+    // generic failure. `code`/`detail` (C1) let the UI point at the right
+    // settings page instead of one message covering unset/missing/disabled
+    // alike; an older server that omits them (C5) leaves both undefined and
+    // the caller falls back to the plain message with no action button.
     const notConfigured = response.status === 412;
     const message = notConfigured
       ? (data && data.error) || "No utility agent is configured for this plugin yet."
@@ -297,6 +304,8 @@ export async function enhanceNote(host, content) {
     const error = new Error(message);
     error.notConfigured = notConfigured;
     error.status = response.status;
+    error.code = data && typeof data.code === "string" ? data.code : undefined;
+    error.detail = data && typeof data.detail === "string" ? data.detail : undefined;
     throw error;
   }
 
@@ -328,13 +337,41 @@ export function enhancePreviewReducer(state, action) {
     case "success":
       return { status: "preview", preview: action.content };
     case "failure":
-      return { status: "error", message: action.message, notConfigured: Boolean(action.notConfigured) };
+      return {
+        status: "error",
+        message: action.message,
+        notConfigured: Boolean(action.notConfigured),
+        code: action.code,
+      };
     case "discard":
     case "accept":
     case "dismiss":
       return { status: "idle" };
     default:
       return state;
+  }
+}
+
+// enhanceErrorAction (C2/C4) maps an enhance failure's `code` to the guided
+// setup action NotesEditor's error branch renders beside Dismiss: which
+// settings page fixes *this* cause, in its own words. "unset"/"missing" both
+// land on the Notes plugin page (pick or re-pick an agent); "disabled" lands
+// on Utility Agents instead — a different page, because picking an agent
+// there again would not fix a merely-disabled one (see server/plugin.go's
+// classifyUtilityAgentError comment for the host-side half of this split).
+// A pure function (no host, no React) so C7's code -> action mapping is
+// testable directly; returns null for an absent/unrecognized code (C5: an
+// older server that omits `code`, or "agent_unavailable", renders no button
+// — the message alone is what's known).
+export function enhanceErrorAction(code) {
+  switch (code) {
+    case "agent_unset":
+    case "agent_missing":
+      return { label: "Choose an agent", href: "/settings/plugins/kandev-plugin-notes" };
+    case "agent_disabled":
+      return { label: "Enable the agent", href: "/settings/utility-agents" };
+    default:
+      return null;
   }
 }
 
@@ -417,15 +454,22 @@ export function describeReadError(error) {
 //   - a PluginStorageConflictError (409) stops the write queue, preserves
 //     the caller's in-flight edit, and only refreshes the authoritative
 //     updatedAt — it never silently discards the edit.
-//   - setTaskId() clears value/updatedAt synchronously (before the new
-//     task's read resolves) so a write in flight for the old task can never
-//     be sent under the new task's id with a stale ifUnmodifiedSince.
+//   - setScopeId() (alias: setTaskId()) clears value/updatedAt synchronously
+//     (before the new scopeId's read resolves) so a write in flight for the
+//     old scopeId can never be sent under the new one's id with a stale
+//     ifUnmodifiedSince.
+//
+// scope defaults to "task" (and scopeId falls back to the legacy `taskId`
+// option) so every pre-existing caller is unaffected; a workspace note store
+// passes { scope: "workspace", scopeId: workspaceId } instead. scope itself
+// is fixed for a store's lifetime — only scopeId changes via setScopeId.
 // ---------------------------------------------------------------------------
-export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
-  let currentTaskId = taskId;
+export function createNoteStore(host, { scope = DEFAULT_SCOPE, scopeId, taskId, surfaceId, onCommit }) {
+  const currentScope = scope;
+  let currentScopeId = scopeId ?? taskId;
   let value = "";
   let updatedAt;
-  let loadedTaskId = null;
+  let loadedScopeId = null;
   let readError = null;
   let dirty = false;
   let conflict = false;
@@ -458,14 +502,14 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
     }
   }
 
-  function scheduleAutoRetry(forTaskId) {
+  function scheduleAutoRetry(forScopeId) {
     if (!readError || !readError.retryable) return;
     if (autoRetryCount >= AUTO_RETRY_LIMIT) return;
     autoRetryCount += 1;
     const delay = AUTO_RETRY_BASE_MS * 2 ** (autoRetryCount - 1);
     autoRetryTimer = setTimeout(() => {
       autoRetryTimer = undefined;
-      if (disposed || forTaskId !== currentTaskId) return;
+      if (disposed || forScopeId !== currentScopeId) return;
       refresh();
     }, delay);
   }
@@ -476,14 +520,14 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
   // logical read as a raw host.api.fetch so the snapshot can carry the real
   // response.status and any JSON error body instead of a regex guess. Fires
   // at most once per rejected refresh(); a probe for a superseded
-  // generation/taskId is dropped by the same guard refresh() itself uses,
+  // generation/scopeId is dropped by the same guard refresh() itself uses,
   // and a probe that itself fails just leaves the describeReadError
   // classification in place.
-  function issueReadErrorProbe(rawError, generation, forTaskId) {
+  function issueReadErrorProbe(rawError, generation, forScopeId) {
     const fetchApi = host.api && host.api.fetch;
     const probe =
       typeof fetchApi === "function"
-        ? Promise.resolve(fetchApi(`user-state/${NOTE_SCOPE}/${forTaskId}/${NOTE_KEY}`)).then(
+        ? Promise.resolve(fetchApi(`user-state/${currentScope}/${forScopeId}/${NOTE_KEY}`)).then(
             async (response) => {
               let body = null;
               try {
@@ -502,7 +546,7 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
         : Promise.resolve(undefined);
 
     probe.then((probeInfo) => {
-      if (!disposed && generation === refreshGeneration && forTaskId === currentTaskId && probeInfo) {
+      if (!disposed && generation === refreshGeneration && forScopeId === currentScopeId && probeInfo) {
         readError = { ...readError, status: probeInfo.status, detail: probeInfo.detail };
         notify();
       }
@@ -522,9 +566,11 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
 
   function getSnapshot() {
     return {
-      taskId: currentTaskId,
+      scope: currentScope,
+      scopeId: currentScopeId,
+      taskId: currentScope === "task" ? currentScopeId : null,
       value,
-      loaded: loadedTaskId === currentTaskId,
+      loaded: loadedScopeId === currentScopeId,
       readError,
       conflict,
       writeError,
@@ -537,13 +583,13 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
   function refresh(options = {}) {
     const preserveValue = options.preserveValue ?? dirty;
     const generation = ++refreshGeneration;
-    const forTaskId = currentTaskId;
-    return host.storage.get(NOTE_SCOPE, forTaskId, NOTE_KEY).then(
+    const forScopeId = currentScopeId;
+    return host.storage.get(currentScope, forScopeId, NOTE_KEY).then(
       (entry) => {
-        if (disposed || generation !== refreshGeneration || forTaskId !== currentTaskId) return false;
+        if (disposed || generation !== refreshGeneration || forScopeId !== currentScopeId) return false;
         if (!preserveValue && !dirty) value = entry ? entry.value : "";
         updatedAt = entry ? entry.updatedAt : undefined;
-        loadedTaskId = forTaskId;
+        loadedScopeId = forScopeId;
         readError = null;
         autoRetryCount = 0;
         clearAutoRetryTimer();
@@ -551,14 +597,14 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
         return true;
       },
       (rawError) => {
-        // Do not mark the task loaded after a rejected read: an empty
+        // Do not mark this scopeId loaded after a rejected read: an empty
         // editor here could omit ifUnmodifiedSince on its first save and
         // silently overwrite an existing note. Stay in a retry state.
-        if (disposed || generation !== refreshGeneration || forTaskId !== currentTaskId) return false;
+        if (disposed || generation !== refreshGeneration || forScopeId !== currentScopeId) return false;
         readError = describeReadError(rawError);
         notify();
-        scheduleAutoRetry(forTaskId);
-        issueReadErrorProbe(rawError, generation, forTaskId);
+        scheduleAutoRetry(forScopeId);
+        issueReadErrorProbe(rawError, generation, forScopeId);
         return false;
       },
     );
@@ -566,9 +612,9 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
 
   function subscribeStorage() {
     if (unsubscribeStorage) unsubscribeStorage();
-    const forTaskId = currentTaskId;
+    const forScopeId = currentScopeId;
     unsubscribeStorage = host.storage.subscribe(
-      { scope: NOTE_SCOPE, scopeId: forTaskId, key: NOTE_KEY, writerId: surfaceId },
+      { scope: currentScope, scopeId: forScopeId, key: NOTE_KEY, writerId: surfaceId },
       () => refresh(),
     );
   }
@@ -586,12 +632,12 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
     }
   }
 
-  function setTaskId(nextTaskId) {
-    if (nextTaskId === currentTaskId) return;
-    currentTaskId = nextTaskId;
+  function setScopeId(nextScopeId) {
+    if (nextScopeId === currentScopeId) return;
+    currentScopeId = nextScopeId;
     value = "";
     updatedAt = undefined;
-    loadedTaskId = null;
+    loadedScopeId = null;
     readError = null;
     autoRetryCount = 0;
     clearAutoRetryTimer();
@@ -621,12 +667,12 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
     // existing note (see refresh()'s reject handler above).
     if (writeBlocked || writeInFlight || pendingValue === undefined || readError) return;
     const generation = writeGeneration;
-    const forTaskId = currentTaskId;
+    const forScopeId = currentScopeId;
     const next = pendingValue;
     pendingValue = undefined;
     writeInFlight = true;
     host.storage
-      .set(NOTE_SCOPE, forTaskId, NOTE_KEY, next, { writerId: surfaceId, ifUnmodifiedSince: updatedAt })
+      .set(currentScope, forScopeId, NOTE_KEY, next, { writerId: surfaceId, ifUnmodifiedSince: updatedAt })
       .then((result) => {
         if (writeGeneration !== generation) return;
         updatedAt = result.updatedAt;
@@ -700,7 +746,11 @@ export function createNoteStore(host, { taskId, surfaceId, onCommit }) {
     },
     getSnapshot,
     setValue,
-    setTaskId,
+    setScopeId,
+    // setTaskId: alias for setScopeId, kept for the "task" scope's existing
+    // callers (useNoteStore's own effect, and any external caller written
+    // before scope existed) — same synchronous clear-before-read guarantee.
+    setTaskId: setScopeId,
     retryRead,
     retryWrite,
     dispose,
@@ -720,12 +770,17 @@ const activeStores = new Set();
 // ---------------------------------------------------------------------------
 // Card-indicator cache — module-level so it survives route navigation and is
 // shared by every rendered card, per AC17: at most one host.storage.get per
-// taskId per page session. A second render serves the cache; a cross-tab
-// subscribe notification updates it from the notification's `deleted` flag
-// alone (no refetch — the payload carries no value); and a successful local
-// write updates it directly, since own-tab echoes of that write are
-// suppressed by the writerId-scoped subscription above and would never
-// reach this module-level listener otherwise.
+// (scope, scopeId) per page session. A second render serves the cache; a
+// cross-tab subscribe notification updates it from the notification's
+// `deleted` flag alone (no refetch — the payload carries no value); and a
+// successful local write updates it directly, since own-tab echoes of that
+// write are suppressed by the writerId-scoped subscription above and would
+// never reach this module-level listener otherwise.
+//
+// Keyed by `${scope}:${scopeId}` (cacheKey below) so a task and a workspace
+// that happen to share a raw id never collide — every exported helper below
+// takes a `scope` argument defaulting to "task", the pre-existing (and only,
+// before workspace notes) caller.
 //
 // A cross-tab *non-delete* notification is optimistically treated as "has a
 // note" without inspecting content, since PluginUserStateChange carries no
@@ -738,63 +793,73 @@ const pendingGets = new Map();
 const cacheListeners = new Map();
 let indicatorUnsubscribe = null;
 
-function notifyCacheListeners(taskId) {
-  const listeners = cacheListeners.get(taskId);
+function cacheKey(scope, scopeId) {
+  return `${scope}:${scopeId}`;
+}
+
+function notifyCacheListeners(key) {
+  const listeners = cacheListeners.get(key);
   if (!listeners) return;
-  const hasNote = noteCache.get(taskId) ?? false;
+  const hasNote = noteCache.get(key) ?? false;
   listeners.forEach((listener) => listener(hasNote));
 }
 
-export function markNote(taskId, hasNote) {
-  noteCache.set(taskId, hasNote);
-  notifyCacheListeners(taskId);
+export function markNote(scopeId, hasNote, scope = DEFAULT_SCOPE) {
+  const key = cacheKey(scope, scopeId);
+  noteCache.set(key, hasNote);
+  notifyCacheListeners(key);
 }
 
-export function getCachedHasNote(host, taskId) {
-  if (noteCache.has(taskId)) return Promise.resolve(noteCache.get(taskId));
-  const pending = pendingGets.get(taskId);
+export function getCachedHasNote(host, scopeId, scope = DEFAULT_SCOPE) {
+  const key = cacheKey(scope, scopeId);
+  if (noteCache.has(key)) return Promise.resolve(noteCache.get(key));
+  const pending = pendingGets.get(key);
   if (pending) return pending;
 
-  const request = host.storage.get(NOTE_SCOPE, taskId, NOTE_KEY).then(
+  const request = host.storage.get(scope, scopeId, NOTE_KEY).then(
     (entry) => {
-      pendingGets.delete(taskId);
+      pendingGets.delete(key);
       const hasNote = Boolean(entry && typeof entry.value === "string" && entry.value !== "");
-      noteCache.set(taskId, hasNote);
-      notifyCacheListeners(taskId);
+      noteCache.set(key, hasNote);
+      notifyCacheListeners(key);
       return hasNote;
     },
     () => {
-      // Leave this taskId uncached on a failed read so a later render can
+      // Leave this key uncached on a failed read so a later render can
       // retry, instead of pinning it to a possibly-wrong false forever.
-      pendingGets.delete(taskId);
+      pendingGets.delete(key);
       return false;
     },
   );
-  pendingGets.set(taskId, request);
+  pendingGets.set(key, request);
   return request;
 }
 
-export function subscribeCache(taskId, listener) {
-  let listeners = cacheListeners.get(taskId);
+export function subscribeCache(scopeId, listener, scope = DEFAULT_SCOPE) {
+  const key = cacheKey(scope, scopeId);
+  let listeners = cacheListeners.get(key);
   if (!listeners) {
     listeners = new Set();
-    cacheListeners.set(taskId, listeners);
+    cacheListeners.set(key, listeners);
   }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) cacheListeners.delete(taskId);
+    if (listeners.size === 0) cacheListeners.delete(key);
   };
 }
 
 // initNoteIndicatorSubscription is called from initialize() every time the
 // plugin is (re-)enabled. It tears down any prior subscription first so
 // calling initialize() twice in one tab (disable -> re-enable) still leaves
-// exactly one module-level subscription, never two.
+// exactly one module-level subscription, never two. No `scope` filter here
+// (deliberately, unlike a single store's own subscribeStorage): one
+// subscription must see every scope's note changes, task and workspace
+// alike, so a workspace note write also flips its sidebar-button cache entry.
 export function initNoteIndicatorSubscription(host) {
   if (indicatorUnsubscribe) indicatorUnsubscribe();
-  indicatorUnsubscribe = host.storage.subscribe({ scope: NOTE_SCOPE, key: NOTE_KEY }, (change) => {
-    markNote(change.scopeId, !change.deleted);
+  indicatorUnsubscribe = host.storage.subscribe({ key: NOTE_KEY }, (change) => {
+    markNote(change.scopeId, !change.deleted, change.scope);
   });
 }
 
@@ -828,15 +893,25 @@ export function disposeNoteIndicatorSubscription() {
 // not render one — confirmed live (empty, uneditable modal body). That is
 // host-platform code this repo cannot change, so the modal keeps the
 // textarea+toolbar fallback until the host wraps plugin modals in one.
+//
+// { scope, scopeId } generalizes this factory beyond the task modal — the
+// workspace sidebar button (openWorkspaceNoteModal) reuses it unchanged with
+// scope: "workspace". `close`, when given, is the owning PluginModalHandle's
+// close() (see openScopedNoteModal below) — NotesEditor's enhance-error
+// action (C4) closes the modal before navigating away from it.
 // ---------------------------------------------------------------------------
-export function makeNoteModalContent(host, taskId) {
+export function makeNoteModalContent(host, { scope = DEFAULT_SCOPE, scopeId, taskId } = {}, close) {
+  const resolvedScopeId = scopeId ?? taskId;
   return function NoteModalContent() {
     const { jsx: h } = host;
     return h(NotesEditor, {
       host,
-      taskId,
+      scope,
+      scopeId: resolvedScopeId,
+      taskId: scope === DEFAULT_SCOPE ? resolvedScopeId : undefined,
       surfaceId: "note-modal",
       presentation: "modal",
+      onCloseModal: close,
     });
   };
 }
@@ -845,16 +920,21 @@ export function makeNoteModalContent(host, taskId) {
 // React layer. Deliberately thin: all the guard logic above is framework-
 // free and unit-tested directly; these components only subscribe to it.
 // ---------------------------------------------------------------------------
-function useNoteStore(host, { taskId, surfaceId }) {
+function useNoteStore(host, { scope = DEFAULT_SCOPE, scopeId, taskId, surfaceId }) {
   const React = host.React;
+  const resolvedScopeId = scopeId ?? taskId;
   const storeRef = React.useRef(null);
   const [snapshot, setSnapshot] = React.useState(null);
 
   React.useEffect(() => {
     const store = createNoteStore(host, {
-      taskId,
+      scope,
+      scopeId: resolvedScopeId,
       surfaceId,
-      onCommit: (hasNote) => markNote(store.getSnapshot().taskId, hasNote),
+      onCommit: (hasNote) => {
+        const snap = store.getSnapshot();
+        markNote(snap.scopeId, hasNote, snap.scope);
+      },
     });
     storeRef.current = store;
     setSnapshot(store.getSnapshot());
@@ -864,15 +944,15 @@ function useNoteStore(host, { taskId, surfaceId }) {
       store.dispose();
       storeRef.current = null;
     };
-    // surfaceId identifies the store; a taskId change while the same
+    // surfaceId/scope identify the store; a scopeId change while the same
     // surface stays mounted is handled by the effect below via
-    // store.setTaskId(), not by recreating the store.
+    // store.setScopeId(), not by recreating the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host, surfaceId]);
+  }, [host, surfaceId, scope]);
 
   React.useEffect(() => {
-    if (storeRef.current) storeRef.current.setTaskId(taskId);
-  }, [taskId]);
+    if (storeRef.current) storeRef.current.setScopeId(resolvedScopeId);
+  }, [resolvedScopeId]);
 
   return { snapshot, store: storeRef.current };
 }
@@ -960,10 +1040,11 @@ export function injectPluginStyles() {
   document.head.appendChild(style);
 }
 
-function NotesEditor({ host, taskId, surfaceId, presentation }) {
+function NotesEditor({ host, scope = DEFAULT_SCOPE, scopeId, taskId, surfaceId, presentation, onCloseModal }) {
   const { jsx: h, ui } = host;
   const React = host.React;
-  const { snapshot, store } = useNoteStore(host, { taskId, surfaceId });
+  const resolvedScopeId = scopeId ?? taskId;
+  const { snapshot, store } = useNoteStore(host, { scope, scopeId: resolvedScopeId, surfaceId });
   const textareaRef = React.useRef(null);
   const pendingSelectionRef = React.useRef(null);
   const [enhanceState, dispatchEnhance] = React.useReducer(enhancePreviewReducer, initialEnhanceState);
@@ -1090,8 +1171,20 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
           type: "failure",
           message: error && error.message ? error.message : "Could not enhance this note.",
           notConfigured: Boolean(error && error.notConfigured),
+          code: error && error.code,
         }),
     );
+  }
+
+  // handleEnhanceErrorAction (C4): navigates to the settings page
+  // enhanceErrorAction resolved for the current error's code. Closes this
+  // surface's own modal first when there is one (onCloseModal, threaded
+  // down from makeNoteModalContent/openScopedNoteModal) — navigating away
+  // while the modal is still open would leave it mounted over the
+  // destination page.
+  function handleEnhanceErrorAction(action) {
+    if (onCloseModal) onCloseModal();
+    host.navigate(action.href);
   }
 
   function handleAcceptEnhance() {
@@ -1212,6 +1305,7 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
         )
       : null;
 
+  const enhanceErrorGuidedAction = enhanceState.status === "error" ? enhanceErrorAction(enhanceState.code) : null;
   const enhanceError =
     enhanceState.status === "error"
       ? h(
@@ -1227,6 +1321,19 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
             { type: "button", size: "sm", variant: "ghost", onClick: () => dispatchEnhance({ type: "dismiss" }) },
             "Dismiss",
           ),
+          enhanceErrorGuidedAction
+            ? h(
+                ui.Button,
+                {
+                  type: "button",
+                  size: "sm",
+                  variant: "ghost",
+                  "data-testid": "notes-enhance-error-action",
+                  onClick: () => handleEnhanceErrorAction(enhanceErrorGuidedAction),
+                },
+                enhanceErrorGuidedAction.label,
+              )
+            : null,
         )
       : null;
 
@@ -1268,8 +1375,8 @@ function NotesEditor({ host, taskId, surfaceId, presentation }) {
     ),
     useRichEditor
       ? h(ui.RichTextEditor, {
-          key: `${surfaceId}-${taskId}-${editorKey}`,
-          taskId,
+          key: `${surfaceId}-${resolvedScopeId}-${editorKey}`,
+          taskId: resolvedScopeId,
           value: snapshot.value,
           onChange: handleRichTextChange,
           placeholder: "Jot a note about this task… (Markdown supported)",
@@ -1308,15 +1415,17 @@ function makeNotesPanelComponent(host) {
   };
 }
 
-function bookGlyph(h) {
+function bookGlyph(h, size = 12) {
   // Inline SVG — this bundle ships no build step and cannot import an icon
-  // set. Matches the curated "book" icon used for the panel's own tab.
+  // set. Matches the curated "book" icon used for the panel's own tab. size
+  // defaults to the card indicator's 12px; the sidebar button passes 14 to
+  // match its siblings' `h-3.5 w-3.5` (RowActionButton) glyph size.
   return h(
     "svg",
     {
       xmlns: "http://www.w3.org/2000/svg",
-      width: 12,
-      height: 12,
+      width: size,
+      height: size,
       viewBox: "0 0 24 24",
       fill: "none",
       stroke: "currentColor",
@@ -1330,24 +1439,28 @@ function bookGlyph(h) {
   );
 }
 
-function useNoteIndicator(host, taskId) {
+function useNoteIndicator(host, scopeId, scope = DEFAULT_SCOPE) {
   const React = host.React;
-  const [hasNote, setHasNote] = React.useState(() => noteCache.get(taskId) ?? false);
+  const [hasNote, setHasNote] = React.useState(() => noteCache.get(cacheKey(scope, scopeId)) ?? false);
 
   React.useEffect(() => {
-    if (!taskId) return undefined;
+    if (!scopeId) return undefined;
     let cancelled = false;
-    getCachedHasNote(host, taskId).then((value) => {
+    getCachedHasNote(host, scopeId, scope).then((value) => {
       if (!cancelled) setHasNote(value);
     });
-    const unsubscribe = subscribeCache(taskId, (value) => {
-      if (!cancelled) setHasNote(value);
-    });
+    const unsubscribe = subscribeCache(
+      scopeId,
+      (value) => {
+        if (!cancelled) setHasNote(value);
+      },
+      scope,
+    );
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, [host, taskId]);
+  }, [host, scopeId, scope]);
 
   return hasNote;
 }
@@ -1386,10 +1499,21 @@ function makeCardIndicatorComponent(host) {
   };
 }
 
-export function openNoteModal(host, taskId, taskTitle) {
-  host.openModal({
-    title: taskTitle ? `Edit notes — ${taskTitle}` : "Edit notes",
-    content: makeNoteModalContent(host, taskId),
+// openScopedNoteModal is the shared body behind openNoteModal (scope:
+// "task") and openWorkspaceNoteModal (scope: "workspace") — same modal
+// chrome, same fixed-height NotesEditor, differing only in scope/scopeId and
+// title. The PluginModalHandle host.openModal returns is only available
+// *after* the call, but makeNoteModalContent needs a close() callback to
+// hand NotesEditor *before* that — closeRef bridges the gap: the content
+// factory closes over closeRef and calls whatever's in it, which is filled
+// in immediately after openModal returns, before React ever renders the
+// modal body.
+function openScopedNoteModal(host, { scope, scopeId, title }) {
+  const closeRef = {};
+  const content = makeNoteModalContent(host, { scope, scopeId }, () => closeRef.close && closeRef.close());
+  const handle = host.openModal({
+    title,
+    content,
     // "xl" (sm:max-w-5xl) is the widest size PluginModalOptions offers —
     // closest match to a spacious note-editing surface. Height is fixed by
     // NotesEditor's own containerStyle for presentation "modal" (a fixed
@@ -1397,6 +1521,66 @@ export function openNoteModal(host, taskId, taskTitle) {
     // grows as the note is typed; the textarea scrolls internally instead.
     size: "xl",
   });
+  closeRef.close = handle.close;
+  return handle;
+}
+
+export function openNoteModal(host, taskId, taskTitle) {
+  return openScopedNoteModal(host, {
+    scope: DEFAULT_SCOPE,
+    scopeId: taskId,
+    title: taskTitle ? `Edit notes — ${taskTitle}` : "Edit notes",
+  });
+}
+
+// openWorkspaceNoteModal is the sidebar button's entry point (B3) — same
+// NotesEditor, same PluginModalHost, scope: "workspace" instead of "task".
+export function openWorkspaceNoteModal(host, workspaceId, workspaceLabel) {
+  return openScopedNoteModal(host, {
+    scope: "workspace",
+    scopeId: workspaceId,
+    title: workspaceLabel ? `Workspace notes — ${workspaceLabel}` : "Workspace notes",
+  });
+}
+
+// resolveWorkspaceId prefers the sidebar slot's own slotProps.workspaceId
+// (forwarded by the host from the same useAppStore read the New Task row
+// itself performs — see app-sidebar-workspace-actions.tsx) and falls back to
+// reading the app store directly, per B6, so the button still resolves an id
+// on a host that predates that slotProps field.
+function resolveWorkspaceId(slotProps, host) {
+  if (slotProps && slotProps.workspaceId) return slotProps.workspaceId;
+  const state = host.store && typeof host.store.getState === "function" ? host.store.getState() : null;
+  return (state && state.workspaces && state.workspaces.activeId) || null;
+}
+
+// makeWorkspaceNotesButton — the sidebar-workspace-actions slot component
+// (B3-B6). Pixel-identical to its RowActionButton siblings (Quick Terminal,
+// Quick Chat): same 24px hit target, same hover classes, same 14px glyph
+// size — text-muted-foreground/70 when the workspace has no note,
+// text-foreground once it does (B5), flipping live via useNoteIndicator's
+// cache subscription, including a write from another tab.
+function makeWorkspaceNotesButton(host) {
+  return function WorkspaceNotesButton({ slotProps }) {
+    const workspaceId = resolveWorkspaceId(slotProps, host);
+    const workspaceLabel = slotProps && slotProps.workspaceLabel;
+    const hasNote = useNoteIndicator(host, workspaceId, "workspace");
+    if (!workspaceId) return null;
+    return host.jsx(
+      "button",
+      {
+        type: "button",
+        "data-testid": "notes-workspace-sidebar-button",
+        title: "Workspace notes",
+        "aria-label": "Workspace notes",
+        className: `flex h-6 w-6 items-center justify-center rounded cursor-pointer hover:bg-muted hover:text-foreground ${
+          hasNote ? "text-foreground" : "text-muted-foreground/70"
+        }`,
+        onClick: () => openWorkspaceNoteModal(host, workspaceId, workspaceLabel),
+      },
+      bookGlyph(host.jsx, 14),
+    );
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1416,6 +1600,12 @@ window.registerKandevPlugin("kandev-plugin-notes", {
     });
 
     registry.registerComponent("task-card-indicators", makeCardIndicatorComponent(host));
+
+    // Workspace-scoped note button (B3-B7). Registering for a slot name the
+    // host doesn't (yet) mount is a documented no-op (PluginRegistry does no
+    // name validation; PluginSlot renders nothing for zero registrations),
+    // so this stays inert on a host build without the sidebar slot.
+    registry.registerComponent("sidebar-workspace-actions", makeWorkspaceNotesButton(host));
 
     registry.registerTaskMenuAction({
       id: "edit-notes",

@@ -182,6 +182,7 @@ const {
   disposeNoteIndicatorSubscription,
   makeNoteModalContent,
   openNoteModal,
+  openWorkspaceNoteModal,
   applyBold,
   applyItalic,
   applyHeading,
@@ -193,6 +194,7 @@ const {
   applyCodeBlock,
   enhanceNote,
   enhancePreviewReducer,
+  enhanceErrorAction,
   initialEnhanceState,
   injectPluginStyles,
 } = bundle;
@@ -283,7 +285,7 @@ test("AC10: panel writes and subscribes with its own surfaceId (panelId)", async
 
 test("AC11: the kanban modal surface uses the bare id 'note-modal' as its writerId", () => {
   const { host, jsxCalls } = createFakeHost();
-  const NoteModalContent = makeNoteModalContent(host, "task-42");
+  const NoteModalContent = makeNoteModalContent(host, { scope: "task", scopeId: "task-42" });
   NoteModalContent();
 
   assert.equal(jsxCalls.length, 1);
@@ -303,7 +305,7 @@ test("AC11: the kanban modal surface uses the bare id 'note-modal' as its writer
 // presentation alone.
 test("the kanban modal surface uses presentation 'modal', the same NotesEditor as the panel", () => {
   const { host, jsxCalls } = createFakeHost();
-  const NoteModalContent = makeNoteModalContent(host, "task-42");
+  const NoteModalContent = makeNoteModalContent(host, { scope: "task", scopeId: "task-42" });
   NoteModalContent();
 
   assert.equal(jsxCalls.length, 1);
@@ -1147,6 +1149,68 @@ test("enhanceNote maps a 412 response to a distinguishable notConfigured error",
   );
 });
 
+// --- C1/C5: enhanceNote surfaces the server's code/detail, or falls back --
+
+test("C1: enhanceNote surfaces the server's code and detail from a 412 body", async () => {
+  const host = fakeApiHost(async () =>
+    fakeJsonResponse(412, {
+      error: "The utility agent configured for this plugin is disabled — enable it (with a model) in Settings > Utility Agents.",
+      code: "agent_disabled",
+      detail: `configured utility agent "builtin-enhance-prompt" is disabled`,
+    }),
+  );
+
+  await assert.rejects(
+    () => enhanceNote(host, "raw markdown"),
+    (error) => {
+      assert.equal(error.code, "agent_disabled");
+      assert.equal(error.detail, `configured utility agent "builtin-enhance-prompt" is disabled`);
+      return true;
+    },
+  );
+});
+
+test("C5: enhanceNote leaves code/detail undefined when an older server's 412 body omits them", async () => {
+  const host = fakeApiHost(async () =>
+    fakeJsonResponse(412, { error: "no utility agent is configured for this plugin" }),
+  );
+
+  await assert.rejects(
+    () => enhanceNote(host, "raw markdown"),
+    (error) => {
+      assert.equal(error.code, undefined);
+      assert.equal(error.detail, undefined);
+      assert.equal(error.notConfigured, true, "the pre-existing notConfigured flag still works unmodified");
+      return true;
+    },
+  );
+});
+
+// --- C2/C4/C5: enhanceErrorAction maps a code to its one correct remedy ---
+
+test("C2: enhanceErrorAction sends agent_unset and agent_missing to the Notes plugin settings page", () => {
+  assert.deepEqual(enhanceErrorAction("agent_unset"), {
+    label: "Choose an agent",
+    href: "/settings/plugins/kandev-plugin-notes",
+  });
+  assert.deepEqual(enhanceErrorAction("agent_missing"), {
+    label: "Choose an agent",
+    href: "/settings/plugins/kandev-plugin-notes",
+  });
+});
+
+test("C2: enhanceErrorAction sends agent_disabled to Utility Agents, a different page than agent_unset", () => {
+  const action = enhanceErrorAction("agent_disabled");
+  assert.equal(action.href, "/settings/utility-agents");
+  assert.notEqual(action.href, enhanceErrorAction("agent_unset").href);
+});
+
+test("C5: enhanceErrorAction returns null for agent_unavailable, an unrecognized code, and a missing code", () => {
+  assert.equal(enhanceErrorAction("agent_unavailable"), null);
+  assert.equal(enhanceErrorAction("something_new_the_server_added"), null);
+  assert.equal(enhanceErrorAction(undefined), null);
+});
+
 test("enhanceNote surfaces other non-2xx statuses as a generic (non-notConfigured) error", async () => {
   const host = fakeApiHost(async () => fakeJsonResponse(502, { error: "AI enhancement failed" }));
 
@@ -1220,4 +1284,191 @@ test("enhancePreviewReducer: failure carries the message and notConfigured flag;
 
   state = enhancePreviewReducer(state, { type: "dismiss" });
   assert.equal(state.status, "idle");
+});
+
+test("C2: enhancePreviewReducer carries the failure's code through to state for the error branch to act on", () => {
+  let state = enhancePreviewReducer(initialEnhanceState, { type: "start" });
+  state = enhancePreviewReducer(state, {
+    type: "failure",
+    message: "The utility agent configured for this plugin is disabled — enable it (with a model) in Settings > Utility Agents.",
+    notConfigured: true,
+    code: "agent_disabled",
+  });
+  assert.equal(state.code, "agent_disabled");
+});
+
+// ---------------------------------------------------------------------------
+// Per-workspace notes (B1-B4): createNoteStore, the indicator cache, and the
+// modal factory generalized from a hardcoded "task" scope to any
+// (scope, scopeId) pair. Every test above this section exercises the
+// default ("task") scope implicitly via its taskId option; this section
+// exercises the "workspace" scope explicitly and the isolation between the
+// two.
+// ---------------------------------------------------------------------------
+
+test("B1: a workspace-scope store reads and writes user-state/workspace/<id>/note", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const { host, callsOf } = createFakeHost();
+    const store = createNoteStore(host, { scope: "workspace", scopeId: "ws-1", surfaceId: "ws-sidebar" });
+
+    const getCall = callsOf("get")[0];
+    assert.deepEqual(getCall.args, { scope: "workspace", scopeId: "ws-1", key: "note" });
+    getCall.resolve({ value: "half-formed idea", updatedAt: "u1" });
+    await flush();
+
+    const snapshot = store.getSnapshot();
+    assert.equal(snapshot.scope, "workspace");
+    assert.equal(snapshot.scopeId, "ws-1");
+    assert.equal(snapshot.taskId, null, "taskId is only meaningful for scope \"task\"");
+    assert.equal(snapshot.value, "half-formed idea");
+
+    store.setValue("revised idea");
+    mock.timers.tick(150);
+    await flush();
+    assert.deepEqual(callsOf("set")[0].args, {
+      scope: "workspace",
+      scopeId: "ws-1",
+      key: "note",
+      value: "revised idea",
+      options: { writerId: "ws-sidebar", ifUnmodifiedSince: "u1" },
+    });
+    store.dispose();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("B1: the failed-read diagnostic probe carries the store's own scope in its path", async () => {
+  const { host, callsOf, apiCalls } = createFakeHost();
+  const store = createNoteStore(host, { scope: "workspace", scopeId: "ws-2", surfaceId: "ws-sidebar" });
+  callsOf("get")[0].reject(new Error("network error status 500"));
+  await flush();
+
+  assert.equal(apiCalls.length, 1);
+  assert.equal(apiCalls[0].path, "user-state/workspace/ws-2/note");
+  store.dispose();
+});
+
+test("B1: setScopeId (the setTaskId alias) clears value/updatedAt synchronously across a scope switch", async () => {
+  const { host, callsOf } = createFakeHost();
+  const store = createNoteStore(host, { scope: "workspace", scopeId: "ws-A", surfaceId: "ws-sidebar" });
+  const getForA = callsOf("get")[0];
+  assert.equal(getForA.args.scopeId, "ws-A");
+  getForA.resolve({ value: "note A", updatedAt: "uA" });
+  await flush();
+  assert.equal(store.getSnapshot().value, "note A");
+
+  store.setScopeId("ws-B");
+  assert.equal(store.getSnapshot().value, "", "cleared synchronously, before ws-B's read resolves");
+  assert.equal(store.getSnapshot().loaded, false);
+  assert.equal(store.getSnapshot().scopeId, "ws-B");
+  assert.equal(store.getSnapshot().scope, "workspace", "scope itself is fixed for the store's lifetime");
+
+  callsOf("get")[1].resolve({ value: "note B", updatedAt: "uB" });
+  await flush();
+  assert.equal(store.getSnapshot().value, "note B");
+  store.dispose();
+});
+
+test("B1: setTaskId remains a working alias for setScopeId", async () => {
+  const { host, callsOf } = createFakeHost();
+  const store = createNoteStore(host, { taskId: "task-A", surfaceId: "panel-1" });
+  callsOf("get")[0].resolve(undefined);
+  await flush();
+
+  store.setTaskId("task-B");
+  assert.equal(store.getSnapshot().scopeId, "task-B");
+  assert.equal(store.getSnapshot().taskId, "task-B");
+  store.dispose();
+});
+
+test("B2: the indicator cache never conflates a task id with a workspace id of the same value", async () => {
+  disposeNoteIndicatorSubscription();
+  const { host, callsOf } = createFakeHost();
+
+  const taskLookup = getCachedHasNote(host, "shared-id", "task");
+  callsOf("get")[0].resolve({ value: "task note", updatedAt: "u1" });
+  assert.equal(await taskLookup, true);
+
+  const workspaceLookup = getCachedHasNote(host, "shared-id", "workspace");
+  assert.equal(callsOf("get").length, 2, "a workspace lookup for the same raw id must not reuse the task's cache entry");
+  callsOf("get")[1].resolve(undefined);
+  assert.equal(await workspaceLookup, false);
+
+  // Re-reading task's entry still serves from cache — the workspace lookup
+  // above did not clobber it.
+  assert.equal(await getCachedHasNote(host, "shared-id", "task"), true);
+  assert.equal(callsOf("get").length, 2, "no further get for the already-cached task entry");
+});
+
+test("B2: a workspace subscribe notification flips only the workspace cache entry, not a same-id task entry", async () => {
+  disposeNoteIndicatorSubscription();
+  const fake = createFakeHost();
+  initNoteIndicatorSubscription(fake.host);
+
+  markNote("shared-id-2", true, "task");
+  const workspacePrimed = getCachedHasNote(fake.host, "shared-id-2", "workspace");
+  fake.callsOf("get")[0].resolve(undefined);
+  assert.equal(await workspacePrimed, false);
+
+  fake.emit({ scope: "workspace", scopeId: "shared-id-2", key: "note", updatedAt: "u2", deleted: false });
+  await flush();
+
+  assert.equal(await getCachedHasNote(fake.host, "shared-id-2", "workspace"), true);
+  assert.equal(await getCachedHasNote(fake.host, "shared-id-2", "task"), true, "the task entry is untouched by the workspace notification");
+  disposeNoteIndicatorSubscription();
+});
+
+test("B2: initNoteIndicatorSubscription's own subscribe filter carries no scope, so it sees every scope's changes", () => {
+  const { host, subscribers } = createFakeHost();
+  initNoteIndicatorSubscription(host);
+  assert.equal(subscribers.length, 1);
+  assert.equal(subscribers[0].filter.scope, undefined);
+  assert.equal(subscribers[0].filter.key, "note");
+  disposeNoteIndicatorSubscription();
+});
+
+test("openWorkspaceNoteModal opens a modal titled with the workspace label, scope: workspace", () => {
+  const { host, openModalCalls, jsxCalls } = createFakeHost();
+
+  openWorkspaceNoteModal(host, "ws-1");
+  assert.equal(openModalCalls[0].title, "Workspace notes");
+  assert.equal(openModalCalls[0].size, "xl");
+
+  openWorkspaceNoteModal(host, "ws-2", "Marketing site");
+  assert.equal(openModalCalls[1].title, "Workspace notes — Marketing site");
+
+  openModalCalls[0].content();
+  openModalCalls[1].content();
+  assert.equal(jsxCalls[0].props.scope, "workspace");
+  assert.equal(jsxCalls[0].props.scopeId, "ws-1");
+  assert.equal(jsxCalls[1].props.scopeId, "ws-2");
+});
+
+test("a modal's content factory can close its own modal via the PluginModalHandle openNoteModal/openWorkspaceNoteModal returned", () => {
+  const { host, jsxCalls } = createFakeHost();
+  let closed = 0;
+  let capturedContent;
+  host.openModal = (options) => {
+    capturedContent = options.content;
+    return {
+      close: () => {
+        closed += 1;
+      },
+    };
+  };
+
+  openWorkspaceNoteModal(host, "ws-1");
+  capturedContent();
+  assert.equal(typeof jsxCalls[0].props.onCloseModal, "function");
+  jsxCalls[0].props.onCloseModal();
+  assert.equal(closed, 1);
+});
+
+test("initialize() registers a sidebar-workspace-actions component (B4/B7 — inert on a host without the slot)", () => {
+  const { host } = createFakeHost();
+  const registry = createFakeRegistry();
+  registeredPlugin.initialize(registry, host);
+  assert.ok(registry.registerComponentCalls.some((c) => c.slot === "sidebar-workspace-actions"));
 });
