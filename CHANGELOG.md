@@ -8,7 +8,8 @@
   `sidebar-workspace-actions` slot, inert on hosts without it) opens the same
   note editor/modal scoped to the active workspace instead of a task
 - feat: Enhance with AI now returns a stable, machine-readable failure code
-  (unset/missing/disabled/unavailable) and a guided-setup action button that
+  (unset/missing/disabled/unconfigured-profile/unavailable) and a guided-setup
+  action button that
   jumps to the correct settings page instead of one message for every cause
 
 ### Changed
