@@ -19,11 +19,17 @@
 
 ### Fixed
 
-- The `agent_unavailable` enhance failure no longer names Settings > Plugins >
-  Notes. That code means the plugin could not identify the cause, so naming a
-  page was a guess — and it sent users who had already completed that step
-  back to it. It now quotes the host's own wording instead. Reachable today by
-  selecting and enabling an agent while leaving its model/profile unbound
+- Enhance with AI now recognizes a fifth state: an agent that is selected and
+  enabled but has **no model or agent profile bound** — the state every
+  built-in utility agent ships in, and therefore what most people hit right
+  after following the documented two-step setup. It gets its own
+  `agent_unconfigured_profile` code and a "Finish setting up the agent" button
+  pointing at Settings > Utility Agents. Previously it fell through to
+  `agent_unavailable`, whose message sent the user back to Settings > Plugins >
+  Notes — the step they had just completed correctly
+- `agent_unavailable` now means only "a cause this plugin could not identify".
+  It names no settings page (any page would be a guess) and quotes the host's
+  own wording instead
 - The workspace note editor no longer shows the task-scoped placeholder
   ("Jot a note about this task…") under a modal titled "Workspace notes"
 

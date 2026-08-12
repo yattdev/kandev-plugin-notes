@@ -69,6 +69,15 @@ const (
 	// reselection, per the ADR 0048 Enabled asymmetry this plugin cannot
 	// change (see README's setup section).
 	enhanceErrorCodeAgentDisabled enhanceErrorCode = "agent_disabled"
+	// enhanceErrorCodeAgentUnconfiguredProfile: the selected agent exists and
+	// is enabled, but has no model / agent profile bound. Distinct from
+	// disabled: the remedy is the same page (Settings > Utility Agents) but a
+	// different control, and telling this user the agent is "disabled" when
+	// they just enabled it is the same dead end as pointing them back at
+	// Settings > Plugins > Notes. It earns its own code because it is the
+	// state every built-in utility agent ships in, so it is what a user hits
+	// immediately after completing the README's two documented steps.
+	enhanceErrorCodeAgentUnconfiguredProfile enhanceErrorCode = "agent_unconfigured_profile"
 	// enhanceErrorCodeAgentUnavailable: a FailedPrecondition whose wording
 	// matched none of the above — the host may have rephrased its message.
 	// Detail still carries that raw wording verbatim so the user sees real
@@ -81,10 +90,11 @@ const (
 // composes an error message inline, so unset/missing and disabled can never
 // be swapped at a call site.
 var enhanceErrorMessages = map[enhanceErrorCode]string{
-	enhanceErrorCodeAgentUnset:       "No utility agent is configured for this plugin — configure one in Settings > Plugins > Notes.",
-	enhanceErrorCodeAgentMissing:     "The utility agent configured for this plugin no longer exists — choose another one in Settings > Plugins > Notes.",
-	enhanceErrorCodeAgentDisabled:    "The utility agent configured for this plugin is disabled — enable it (with a model) in Settings > Utility Agents.",
-	enhanceErrorCodeAgentUnavailable: "The configured utility agent is unavailable.",
+	enhanceErrorCodeAgentUnset:               "No utility agent is configured for this plugin — configure one in Settings > Plugins > Notes.",
+	enhanceErrorCodeAgentMissing:             "The utility agent configured for this plugin no longer exists — choose another one in Settings > Plugins > Notes.",
+	enhanceErrorCodeAgentDisabled:            "The utility agent configured for this plugin is disabled — enable it (with a model) in Settings > Utility Agents.",
+	enhanceErrorCodeAgentUnconfiguredProfile: "The utility agent configured for this plugin has no model or agent profile bound — finish setting it up in Settings > Utility Agents.",
+	enhanceErrorCodeAgentUnavailable:         "The configured utility agent is unavailable.",
 }
 
 // enhanceErrorMessage resolves the user-facing message for a code. A
@@ -103,15 +113,16 @@ func enhanceErrorMessage(code enhanceErrorCode, detail string) string {
 	return message
 }
 
-// classifyUtilityAgentError maps host_utility.go's FailedPrecondition
-// wordings ("no utility agent configured for this plugin", "configured
-// utility agent %q not found", "configured utility agent %q is disabled") to
-// a stable code, kept as its own function (rather
-// than inlined at the call site) so the mapping is unit-testable in
-// isolation and has exactly one home. Substring matching is coupled to the
-// host's current wording — a rephrase degrades to
-// enhanceErrorCodeAgentUnavailable rather than misclassifying, since Detail
-// (the raw message) is always preserved alongside it.
+// classifyUtilityAgentError maps each of host_utility.go's four
+// FailedPrecondition wordings ("no utility agent configured for this plugin",
+// "configured utility agent %q not found", "configured utility agent %q is
+// disabled", "configured utility agent %q has no usable agent profile") to a
+// stable code, kept as its own function (rather than inlined at the call
+// site) so the mapping is unit-testable in isolation and has exactly one
+// home. Substring matching is coupled to the host's current wording — a
+// rephrase degrades to enhanceErrorCodeAgentUnavailable rather than
+// misclassifying, since Detail (the raw message) is always preserved
+// alongside it.
 func classifyUtilityAgentError(message string) enhanceErrorCode {
 	switch {
 	case strings.Contains(message, "no utility agent configured"):
@@ -120,6 +131,8 @@ func classifyUtilityAgentError(message string) enhanceErrorCode {
 		return enhanceErrorCodeAgentMissing
 	case strings.Contains(message, "is disabled"):
 		return enhanceErrorCodeAgentDisabled
+	case strings.Contains(message, "no usable agent profile"):
+		return enhanceErrorCodeAgentUnconfiguredProfile
 	default:
 		return enhanceErrorCodeAgentUnavailable
 	}

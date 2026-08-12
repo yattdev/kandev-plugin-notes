@@ -355,14 +355,18 @@ export function enhancePreviewReducer(state, action) {
 // enhanceErrorAction (C2/C4) maps an enhance failure's `code` to the guided
 // setup action NotesEditor's error branch renders beside Dismiss: which
 // settings page fixes *this* cause, in its own words. "unset"/"missing" both
-// land on the Notes plugin page (pick or re-pick an agent); "disabled" lands
-// on Utility Agents instead — a different page, because picking an agent
-// there again would not fix a merely-disabled one (see server/plugin.go's
-// classifyUtilityAgentError comment for the host-side half of this split).
+// land on the Notes plugin page (pick or re-pick an agent); "disabled" and
+// "unconfigured_profile" land on Utility Agents instead — a different page,
+// because picking an agent there again would not fix either one (see
+// server/plugin.go's classifyUtilityAgentError comment for the host-side half
+// of this split). The two Utility Agents causes keep separate labels because
+// they are separate controls on that page: flipping Enabled, versus binding a
+// model/profile. Telling someone to "enable" an agent they just enabled is
+// the dead end this whole mapping exists to remove.
 // A pure function (no host, no React) so C7's code -> action mapping is
 // testable directly; returns null for an absent/unrecognized code (C5: an
-// older server that omits `code`, or "agent_unavailable", renders no button
-// — the message alone is what's known).
+// older server that omits `code`, or "agent_unavailable" — a cause the plugin
+// could not identify, where the message alone is what's known).
 export function enhanceErrorAction(code) {
   switch (code) {
     case "agent_unset":
@@ -370,6 +374,8 @@ export function enhanceErrorAction(code) {
       return { label: "Choose an agent", href: "/settings/plugins/kandev-plugin-notes" };
     case "agent_disabled":
       return { label: "Enable the agent", href: "/settings/utility-agents" };
+    case "agent_unconfigured_profile":
+      return { label: "Finish setting up the agent", href: "/settings/utility-agents" };
     default:
       return null;
   }

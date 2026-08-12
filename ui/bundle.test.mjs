@@ -1206,6 +1206,16 @@ test("C2: enhanceErrorAction sends agent_disabled to Utility Agents, a different
   assert.notEqual(action.href, enhanceErrorAction("agent_unset").href);
 });
 
+test("agent_unconfigured_profile gets its own action on Utility Agents, distinct from agent_disabled's", () => {
+  const action = enhanceErrorAction("agent_unconfigured_profile");
+  assert.equal(action.href, "/settings/utility-agents");
+  // Same page, different control — an agent the user just enabled must not be
+  // labelled "Enable the agent" again, which is the dead end this mapping
+  // exists to remove.
+  assert.notEqual(action.label, enhanceErrorAction("agent_disabled").label);
+  assert.notEqual(action.href, enhanceErrorAction("agent_unset").href);
+});
+
 test("C5: enhanceErrorAction returns null for agent_unavailable, an unrecognized code, and a missing code", () => {
   assert.equal(enhanceErrorAction("agent_unavailable"), null);
   assert.equal(enhanceErrorAction("something_new_the_server_added"), null);

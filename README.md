@@ -135,21 +135,24 @@ say so explicitly rather than both pointing back at Settings > Plugins > Notes:
 | --- | --- |
 | No agent ever selected | Settings > Plugins > Notes |
 | Selected agent was since deleted | Settings > Plugins > Notes |
-| Selected agent exists but is disabled | **Settings > Utility Agents** |
+| Selected agent exists but is disabled | **Settings > Utility Agents** ("Enable the agent") |
+| Selected and enabled, but no model / agent profile bound | **Settings > Utility Agents** ("Finish setting up the agent") |
 | Any other setup problem the plugin can't identify | no page named; the host's own wording is quoted instead |
 | A real execution failure (the agent ran and failed) | no settings link — try again |
 
-For the first three, **Dismiss** is joined by a second action button that
+For the first four, **Dismiss** is joined by a second action button that
 jumps straight to the right page for that cause, so there's no need to guess
-which of the two settings is missing.
+which setting is missing.
 
-The fourth row is the honest fallback. One case reaches it today that is
-worth knowing about: an agent that is **selected and enabled but has no model
-or agent profile bound** (the state every built-in utility agent ships in).
-The host reports *"configured utility agent ... has no usable agent profile"*,
-and the plugin quotes that verbatim rather than naming a page, because the
-step it would name is one you have already done. Finish binding a model to
-that agent under **Settings > Utility Agents** and Enhance will run.
+The fourth row is the one most people hit, because **every built-in utility
+agent ships with no model bound**: completing steps 1 and 2 above still leaves
+it unconfigured. It is called out separately from "disabled" on purpose —
+both are fixed on the same page but by different controls, and being told to
+enable an agent you just enabled is the dead end this plugin exists to avoid.
+
+The fifth row is the honest fallback: a `FailedPrecondition` this plugin does
+not recognize (for example after a host rephrase). It names no page, because
+any page it named would be a guess, and quotes the host's own wording instead.
 
 ## Install
 

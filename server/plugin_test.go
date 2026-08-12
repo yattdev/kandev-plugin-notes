@@ -257,7 +257,7 @@ func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testin
 			// against a real host during QA.
 			name:        "enabled agent with no bound profile",
 			hostMessage: `configured utility agent "builtin-enhance-prompt" has no usable agent profile`,
-			wantCode:    enhanceErrorCodeAgentUnavailable,
+			wantCode:    enhanceErrorCodeAgentUnconfiguredProfile,
 		},
 	}
 
@@ -305,6 +305,7 @@ func TestEnhanceErrorMessage_UnavailableNamesNoPage(t *testing.T) {
 		enhanceErrorCodeAgentUnset,
 		enhanceErrorCodeAgentMissing,
 		enhanceErrorCodeAgentDisabled,
+		enhanceErrorCodeAgentUnconfiguredProfile,
 	} {
 		require.Contains(t, enhanceErrorMessage(code, "raw detail"), "Settings >",
 			"classified code %q must name its remedy page", code)
@@ -328,6 +329,7 @@ func TestClassifyUtilityAgentError_TableDriven(t *testing.T) {
 		{"no utility agent configured for this plugin", enhanceErrorCodeAgentUnset},
 		{`configured utility agent "x" not found`, enhanceErrorCodeAgentMissing},
 		{`configured utility agent "x" is disabled`, enhanceErrorCodeAgentDisabled},
+		{`configured utility agent "x" has no usable agent profile`, enhanceErrorCodeAgentUnconfiguredProfile},
 		{"", enhanceErrorCodeAgentUnavailable},
 		{"something else entirely", enhanceErrorCodeAgentUnavailable},
 	}
