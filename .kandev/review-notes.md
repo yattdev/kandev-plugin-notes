@@ -6,10 +6,9 @@ live here because `kandev-source` gitignores `/.kandev/` by design, so the file
 cannot be committed there — fold the entry below into the host PR description
 as well as this one.
 
-## Follow-up tasks created (out of scope for these PRs)
+## Known issue found during review (out of scope for these PRs, untracked)
 
-- **Plugin webhooks are reachable without authentication** (task
-  `9d9ed505-12fe-405f-8efb-32b50c58593b`, opened against `kdlbs/kandev`) —
+- **Plugin webhooks are reachable without authentication** —
   host file `apps/backend/internal/auth/httpmw/middleware.go:120`. The auth
   allowlist exempts every `/api/plugins/*/webhooks/*` path on the rationale that
   "the plugin subprocess owns signature validation". This plugin's `enhance`
@@ -26,10 +25,19 @@ as well as this one.
 
 ## Action required by author
 
-- The follow-up task above is in state `FAILED`, not parked in Backlogs as
-  intended: an agent auto-started on it at 05:26 UTC on 2026-08-12 and its
-  session died on a workspace bootstrap error (`mise ERROR ... Config files in
-  /data/tasks/plugin-webhooks-are_gp4sb4ll/kdlbs-kandev/mise.toml are not
-  trusted` → `failed to initialize ACP: context canceled`). The failure is
-  environmental and unrelated to either branch's code, but the task will not
-  read as a clean open backlog item until it is reset.
+- **This finding is currently tracked nowhere.** A subtask was opened for it
+  during QA and then deleted before the QA re-check, so the note deliberately
+  cites no task ID rather than a dead one. Decide whether to re-file it
+  upstream against `kdlbs/kandev`; if you do not, this PR description is the
+  only surviving record of it.
+
+- **Release trigger matters for this branch.** `manifest.yaml` and `Makefile`
+  are hand-set to `0.3.0` and `CHANGELOG.md` carries a hand-written
+  `## [0.3.0]` section, which is correct for the tag-push path only: push
+  `v0.3.0` and `.github/workflows/release.yml` skips its `prepare` job and
+  publishes 0.3.0 straight from this metadata. Dispatching the same workflow
+  manually instead computes `max(manifest, latest tag)` and then bumps past it,
+  so the default `patch` choice would publish **0.3.1**, rewrite both version
+  strings, and prepend a generated `## [0.3.1]` section above the hand-written
+  `## [0.3.0]` one, leaving two changelog entries for one set of changes and no
+  0.3.0 release. Push the tag.
