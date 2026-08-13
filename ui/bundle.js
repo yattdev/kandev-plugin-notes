@@ -314,6 +314,11 @@ export async function enhanceNote(host, content) {
     error.notConfigured = false;
     throw error;
   }
+  if (data.content.trim() === "") {
+    const error = new Error("The AI enhance service returned an empty result.");
+    error.notConfigured = false;
+    throw error;
+  }
   return data.content;
 }
 

@@ -1122,14 +1122,15 @@ function fakeJsonResponse(status, body) {
 test("enhanceNote posts the note content to webhooks/enhance and returns the improved content", async () => {
   let capturedPath;
   let capturedInit;
+  const improvedContent = "  # Improved\n\nBetter note.  ";
   const host = fakeApiHost(async (path, init) => {
     capturedPath = path;
     capturedInit = init;
-    return fakeJsonResponse(200, { content: "improved markdown" });
+    return fakeJsonResponse(200, { content: improvedContent });
   });
 
   const result = await enhanceNote(host, "raw markdown");
-  assert.equal(result, "improved markdown");
+  assert.equal(result, improvedContent, "nonblank content is returned verbatim, not trimmed");
   assert.equal(capturedPath, "webhooks/enhance");
   assert.equal(capturedInit.method, "POST");
   assert.equal(JSON.parse(capturedInit.body).content, "raw markdown");
@@ -1254,6 +1255,21 @@ test("enhanceNote rejects when the success response is missing a content field",
 
   await assert.rejects(() => enhanceNote(host, "raw markdown"));
 });
+
+for (const content of ["", "   \n\t  "]) {
+  test(`enhanceNote rejects a successful response with blank content ${JSON.stringify(content)}`, async () => {
+    const host = fakeApiHost(async () => fakeJsonResponse(200, { content }));
+
+    await assert.rejects(
+      () => enhanceNote(host, "raw markdown"),
+      (error) => {
+        assert.equal(error.message, "The AI enhance service returned an empty result.");
+        assert.equal(error.notConfigured, false);
+        return true;
+      },
+    );
+  });
+}
 
 // ---------------------------------------------------------------------------
 // enhancePreviewReducer — the preview/Accept/Discard state machine.
