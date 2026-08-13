@@ -33,3 +33,5 @@ require (
 // layout this path assumes, and what changes once pkg/pluginsdk ships as its
 // own versioned module.
 replace github.com/kandev/kandev => ../kandev/apps/backend
+
+tool github.com/kandev/kandev/cmd/plugin-pack
