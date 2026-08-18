@@ -57,6 +57,16 @@ editor and optional AI-assisted proofreading.
   overwritten automatically. See "Notes are private to you" below for the
   privacy trade-off this makes.
 - **Card indicator** — a small glyph on cards that have a note.
+- **Workspace notes** — a small book icon beside Quick Terminal and Quick Chat
+  in the sidebar's New Task row (on a host build that carries the
+  `sidebar-workspace-actions` slot) opens the same editor, modal, toolbar,
+  Preview, and Enhance with AI included, scoped to the active **workspace**
+  instead of a task. Use it for a half-formed idea or a reminder that isn't
+  worth creating a task to hold. The icon is muted when the workspace has no
+  note and full-contrast once it does, and flips live (no reload) as the note
+  is written, emptied, or edited from another tab. A task's note and its
+  workspace's note are stored and shown independently; the icon is not
+  rendered without an active workspace.
 - **Cross-tab sync** — an edit in one tab shows up in another without a reload.
 
 ## If a note won't load
@@ -81,23 +91,68 @@ otherwise save over an existing note the read never actually saw.
 
 ## Notes are private to you — except when you ask AI to enhance one
 
-Each note is stored per **user**, per **task**, under the plugin's own key
-(`("task", <taskId>, "note")`) via Kandev's per-user plugin storage
-(`capabilities.user_state`). Two people looking at the same task each see their
-own note; nobody else can read yours, and the agent working the task cannot
+Each note is stored per **user**, per **task or workspace** (whichever you
+opened), under the plugin's own key (`(scope, id, "note")`, `scope` being
+`"task"` or `"workspace"`) via Kandev's per-user plugin storage
+(`capabilities.user_state`). Two people looking at the same task or workspace
+each see their own note; nobody else can read yours, and no task's agent can
 read or write it.
 
 **The one exception is the "Enhance with AI" button.** Clicking it sends the
 note's current markdown to the utility agent configured for this plugin
 (**Settings > Plugins > Notes**) via a one-shot completion
 (`capabilities.agent_invoke` / `Host.InvokeUtilityAgent`) — that content
-leaves the "nobody else can read it" boundary for that one request. If no
-utility agent is configured, the button shows a clear, non-fatal message
-instead of failing silently. Skip the button entirely to keep a note fully
-private.
+leaves the "nobody else can read it" boundary for that one request. See
+"Setting up Enhance with AI" below for what has to be configured first, and
+what each failure message means. Skip the button entirely to keep a note
+fully private.
 
-If you want the task's own agent to see something, put it in the task
+If you want a task's own agent to see something, put it in the task
 description or say it in chat. This is a scratchpad, not a shared field.
+
+## Setting up Enhance with AI
+
+"Enhance with AI" needs **two separate settings**, both satisfied, before it
+can run:
+
+1. **Select an agent for this plugin** — Settings > Plugins > Notes,
+   `config_schema.utility_agent`. This is what tells the plugin which
+   utility agent to ask.
+2. **Enable that agent, with a model** — Settings > Utility Agents. Selecting
+   an agent in step 1 does not enable it; a newly-added utility agent starts
+   disabled with no model chosen.
+
+Both steps are required because **a disabled utility agent is usable by
+kandev's own built-in features (e.g. task-create prompt enhancement) but not
+by any plugin**, including this one. Kandev's own prompt-enhancement path
+does not check `Enabled`; this plugin's request goes through
+`Host.InvokeUtilityAgent`, which does. That asymmetry is host behavior this
+plugin cannot change — clicking Enhance with an agent selected-but-disabled
+fails exactly like having no agent selected at all, and the two failures now
+say so explicitly rather than both pointing back at Settings > Plugins > Notes:
+
+| Situation | Message points you to |
+| --- | --- |
+| No agent ever selected | Settings > Plugins > Notes |
+| Selected agent was since deleted | Settings > Plugins > Notes |
+| Selected agent exists but is disabled | **Settings > Utility Agents** ("Enable the agent") |
+| Selected and enabled, but no model / agent profile bound | **Settings > Utility Agents** ("Finish setting up the agent") |
+| Any other setup problem the plugin can't identify | no page named; the host's own wording is quoted instead |
+| A real execution failure (the agent ran and failed) | no settings link — try again |
+
+For the first four, **Dismiss** is joined by a second action button that
+jumps straight to the right page for that cause, so there's no need to guess
+which setting is missing.
+
+The fourth row is the one most people hit, because **every built-in utility
+agent ships with no model bound**: completing steps 1 and 2 above still leaves
+it unconfigured. It is called out separately from "disabled" on purpose —
+both are fixed on the same page but by different controls, and being told to
+enable an agent you just enabled is the dead end this plugin exists to avoid.
+
+The fifth row is the honest fallback: a `FailedPrecondition` this plugin does
+not recognize (for example after a host rephrase). It names no page, because
+any page it named would be a guess, and quotes the host's own wording instead.
 
 ## Install
 
@@ -113,9 +168,7 @@ curl -F "package=@kandev-plugin-notes-<version>.tar.gz" \
 Sideloaded plugins register disabled/unverified; enable it in
 **Settings > Plugins**. Reinstalling the same version returns 409 — bump the
 version in `manifest.yaml` (and `Makefile`) first. To use "Enhance with AI",
-also pick a utility agent for this plugin under **Settings > Plugins > Notes**
-(`config_schema.utility_agent`) — without one, the button surfaces a
-not-configured message rather than failing.
+see "Setting up Enhance with AI" above — it's a two-step setup, not one.
 
 ## Development
 
