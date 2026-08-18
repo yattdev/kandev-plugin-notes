@@ -5,7 +5,7 @@
 # (/api/plugins/<id>/...). Keep the three in sync when bumping version.
 id: "kandev-plugin-notes"
 api_version: 1
-version: "0.3.0"
+version: "0.4.0"
 display_name: "Notes"
 description: "A private, per-user scratchpad note on any task or workspace: a dockview/mobile panel, a sidebar workspace-notes button, markdown editing with a formatting toolbar, AI-assisted proofreading with guided setup, and a kanban card shortcut."
 author: "yattdev"

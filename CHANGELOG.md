@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.0] - 2026-08-18
+
+### Changed
+
+- fix(notes): reject blank AI enhance results (610015c)
+- fix: keep plugin-pack tool deps tidy (c904ea3)
+- fix: track plugin-pack as a Go tool (9c336b2)
+- fix: add missing jsonschema checksum for packaging (9d9706a)
+- qa: keep the unpatched upstream auth finding out of public PR text (3044930)
+- review: cite the live tracking task for the webhook finding (9681dd3)
+- qa: drop dead task reference and record the release-trigger caveat (1671b2a)
+- review: notes for PR/MR description (553be63)
+- review: list the fifth enhance failure code in the 0.3.0 changelog (777992c)
+- feat: route an unbound agent profile to its own code and setup action (bbb3160)
+- qa: stop agent_unavailable naming a settings page it cannot know (06e731d)
+- chore: bump version to 0.3.0, document workspace notes and AI setup (49b5385)
+- feat: diagnose Enhance with AI failures and add guided setup (3cc89fb)
+- feat: generalize notes storage to workspace scope, add sidebar button (87e0ccf)
+
+
 ## [0.3.0] - 2026-08-11
 
 ### Added
