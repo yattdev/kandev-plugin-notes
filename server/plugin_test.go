@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
@@ -170,10 +171,10 @@ func TestHandleWebhook_Enhance_NoHost_ReturnsServiceUnavailable(t *testing.T) {
 	require.Equal(t, int32(503), resp.Status)
 }
 
-func TestHandleWebhook_Enhance_NoUtilityAgentConfigured_ReturnsPreconditionFailed(t *testing.T) {
+func TestHandleWebhook_Enhance_NoAgentProfileConfigured_ReturnsPreconditionFailed(t *testing.T) {
 	p := &notesPlugin{}
 	p.SetHost(&fakeHost{invokeUtilityAgent: func(context.Context, string) (string, error) {
-		return "", status.Error(codes.FailedPrecondition, "no utility agent configured for this plugin")
+		return "", status.Error(codes.FailedPrecondition, "no agent profile configured for this plugin")
 	}})
 
 	body, err := json.Marshal(map[string]string{"content": "hello"})
@@ -191,7 +192,7 @@ func TestHandleWebhook_Enhance_NoUtilityAgentConfigured_ReturnsPreconditionFaile
 	require.NoError(t, json.Unmarshal(resp.Body, &out))
 	require.NotEmpty(t, out.Error)
 	require.Equal(t, enhanceErrorCodeAgentUnset, out.Code)
-	require.Equal(t, "no utility agent configured for this plugin", out.Detail)
+	require.Equal(t, "no agent profile configured for this plugin", out.Detail)
 }
 
 func TestHandleWebhook_Enhance_OtherAgentError_ReturnsBadGateway(t *testing.T) {
@@ -220,9 +221,9 @@ func TestHandleWebhook_Enhance_OtherAgentError_ReturnsBadGateway(t *testing.T) {
 	require.Equal(t, "AI enhancement failed", out.Error)
 }
 
-// TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording is C1/C7:
-// each of host_utility.go's classified wordings, plus unclassified ones, maps
-// to a code with the raw message preserved verbatim as Detail.
+// TestHandleWebhook_Enhance_ClassifiesKnownConfigurationFailures confirms the
+// direct agent-profile contract and legacy utility-agent compatibility both
+// retain their distinct, guided 412 responses.
 func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -230,32 +231,27 @@ func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testin
 		wantCode    enhanceErrorCode
 	}{
 		{
-			name:        "unset",
-			hostMessage: "no utility agent configured for this plugin",
+			name:        "direct profile unset",
+			hostMessage: "no agent profile configured for this plugin",
 			wantCode:    enhanceErrorCodeAgentUnset,
 		},
 		{
-			name:        "missing",
-			hostMessage: `configured utility agent "builtin-enhance-prompt" not found`,
+			name:        "direct profile missing",
+			hostMessage: `configured agent profile "profile-1" not found`,
 			wantCode:    enhanceErrorCodeAgentMissing,
 		},
 		{
-			name:        "disabled",
+			name:        "direct profile ineligible",
+			hostMessage: `configured agent profile "profile-1" is not eligible for utility execution`,
+			wantCode:    enhanceErrorCodeAgentIneligible,
+		},
+		{
+			name:        "legacy disabled utility agent",
 			hostMessage: `configured utility agent "builtin-enhance-prompt" is disabled`,
 			wantCode:    enhanceErrorCodeAgentDisabled,
 		},
 		{
-			name:        "unrecognized wording degrades to unavailable, not a wrong instruction",
-			hostMessage: "utility agent invocation is temporarily throttled",
-			wantCode:    enhanceErrorCodeAgentUnavailable,
-		},
-		{
-			// host_utility.go:84 — reachable by following the README's own
-			// two-step setup: agent selected AND enabled, but the profile
-			// binding left at its shipped default (every builtin utility
-			// agent starts with an empty agent_profile_id). Confirmed live
-			// against a real host during QA.
-			name:        "enabled agent with no bound profile",
+			name:        "legacy utility agent with no bound profile",
 			hostMessage: `configured utility agent "builtin-enhance-prompt" has no usable agent profile`,
 			wantCode:    enhanceErrorCodeAgentUnconfiguredProfile,
 		},
@@ -283,57 +279,63 @@ func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testin
 			require.NoError(t, json.Unmarshal(resp.Body, &out))
 			require.Equal(t, tt.wantCode, out.Code)
 			require.Equal(t, tt.hostMessage, out.Detail)
-			require.Equal(t, enhanceErrorMessage(tt.wantCode, tt.hostMessage), out.Error)
-
-			// An unclassified cause must not prescribe a settings page: the
-			// user may have already completed the step it would name. It
-			// carries the host's own wording instead.
-			if tt.wantCode == enhanceErrorCodeAgentUnavailable {
-				require.NotContains(t, out.Error, "Settings >")
-				require.Contains(t, out.Error, tt.hostMessage)
-			}
+			require.Equal(t, enhanceErrorMessage(tt.wantCode), out.Error)
 		})
 	}
 }
 
-// TestEnhanceErrorMessage_UnavailableNamesNoPage pins the rule directly: every
-// classified code names exactly one remedy page, and agent_unavailable names
-// none. Without this, a later edit could quietly reintroduce a wrong-page
-// instruction for a cause the plugin cannot identify.
-func TestEnhanceErrorMessage_UnavailableNamesNoPage(t *testing.T) {
+func TestEnhanceErrorMessage_ClassifiedErrorsNameTheirRemedy(t *testing.T) {
 	for _, code := range []enhanceErrorCode{
 		enhanceErrorCodeAgentUnset,
 		enhanceErrorCodeAgentMissing,
+		enhanceErrorCodeAgentIneligible,
 		enhanceErrorCodeAgentDisabled,
 		enhanceErrorCodeAgentUnconfiguredProfile,
 	} {
-		require.Contains(t, enhanceErrorMessage(code, "raw detail"), "Settings >",
+		require.Contains(t, enhanceErrorMessage(code), "Settings >",
 			"classified code %q must name its remedy page", code)
 	}
-
-	unavailable := enhanceErrorMessage(enhanceErrorCodeAgentUnavailable, "raw detail")
-	require.NotContains(t, unavailable, "Settings >")
-	require.Contains(t, unavailable, "raw detail")
-
-	// No detail to pass through: still no invented page.
-	require.NotContains(t, enhanceErrorMessage(enhanceErrorCodeAgentUnavailable, ""), "Settings >")
 }
 
-// TestClassifyUtilityAgentError_TableDriven exercises classifyUtilityAgentError
-// directly, isolated from HandleWebhook and the gRPC status plumbing.
-func TestClassifyUtilityAgentError_TableDriven(t *testing.T) {
+func TestHandleWebhook_Enhance_UnrecognizedFailedPreconditionIsExecutionFailure(t *testing.T) {
+	p := &notesPlugin{}
+	p.SetHost(&fakeHost{invokeUtilityAgent: func(context.Context, string) (string, error) {
+		return "", status.Error(codes.FailedPrecondition, "utility execution is temporarily throttled")
+	}})
+
+	body, err := json.Marshal(map[string]string{"content": "hello"})
+	require.NoError(t, err)
+	resp, err := p.HandleWebhook(context.Background(), &pluginsdk.WebhookRequest{WebhookKey: "enhance", Method: http.MethodPost, Body: body})
+	require.NoError(t, err)
+	require.Equal(t, int32(http.StatusBadGateway), resp.Status)
+
+	var out enhanceErrorBody
+	require.NoError(t, json.Unmarshal(resp.Body, &out))
+	require.Equal(t, "AI enhancement failed", out.Error)
+	require.Empty(t, out.Code)
+	require.Empty(t, out.Detail)
+}
+
+// TestClassifyAgentProfileError_TableDriven exercises the exact host-message
+// classifier without the gRPC transport.
+func TestClassifyAgentProfileError_TableDriven(t *testing.T) {
 	tests := []struct {
 		message string
 		want    enhanceErrorCode
+		ok      bool
 	}{
-		{"no utility agent configured for this plugin", enhanceErrorCodeAgentUnset},
-		{`configured utility agent "x" not found`, enhanceErrorCodeAgentMissing},
-		{`configured utility agent "x" is disabled`, enhanceErrorCodeAgentDisabled},
-		{`configured utility agent "x" has no usable agent profile`, enhanceErrorCodeAgentUnconfiguredProfile},
-		{"", enhanceErrorCodeAgentUnavailable},
-		{"something else entirely", enhanceErrorCodeAgentUnavailable},
+		{"no agent profile configured for this plugin", enhanceErrorCodeAgentUnset, true},
+		{`configured agent profile "x" not found`, enhanceErrorCodeAgentMissing, true},
+		{`configured agent profile "x" is not eligible for utility execution`, enhanceErrorCodeAgentIneligible, true},
+		{`configured utility agent "x" is disabled`, enhanceErrorCodeAgentDisabled, true},
+		{`configured utility agent "x" has no usable agent profile`, enhanceErrorCodeAgentUnconfiguredProfile, true},
+		{`configured agent profile profile-1 not found`, "", false},
+		{"", "", false},
+		{"something else entirely", "", false},
 	}
 	for _, tt := range tests {
-		require.Equal(t, tt.want, classifyUtilityAgentError(tt.message), "message: %q", tt.message)
+		got, ok := classifyAgentProfileError(tt.message)
+		require.Equal(t, tt.ok, ok, "message: %q", tt.message)
+		require.Equal(t, tt.want, got, "message: %q", tt.message)
 	}
 }

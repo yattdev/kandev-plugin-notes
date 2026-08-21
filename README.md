@@ -51,7 +51,7 @@ editor and optional AI-assisted proofreading.
   them off via the checklist syntax instead.
 
 - **Enhance with AI** — a button next to the toolbar/editor sends the note's
-  current markdown to your configured utility agent to proofread grammar,
+  current markdown to your configured agent profile to proofread grammar,
   spelling, and clarity. The result is shown as a preview with
   **Accept**/**Discard** before it ever replaces your note — nothing is
   overwritten automatically. See "Notes are private to you" below for the
@@ -99,7 +99,7 @@ each see their own note; nobody else can read yours, and no task's agent can
 read or write it.
 
 **The one exception is the "Enhance with AI" button.** Clicking it sends the
-note's current markdown to the utility agent configured for this plugin
+note's current markdown to the agent profile configured for this plugin
 (**Settings > Plugins > Notes**) via a one-shot completion
 (`capabilities.agent_invoke` / `Host.InvokeUtilityAgent`) — that content
 leaves the "nobody else can read it" boundary for that one request. See
@@ -112,47 +112,28 @@ description or say it in chat. This is a scratchpad, not a shared field.
 
 ## Setting up Enhance with AI
 
-"Enhance with AI" needs **two separate settings**, both satisfied, before it
-can run:
+"Enhance with AI" needs one setting before it can run:
 
-1. **Select an agent for this plugin** — Settings > Plugins > Notes,
-   `config_schema.utility_agent`. This is what tells the plugin which
-   utility agent to ask.
-2. **Enable that agent, with a model** — Settings > Utility Agents. Selecting
-   an agent in step 1 does not enable it; a newly-added utility agent starts
-   disabled with no model chosen.
+1. **Select an agent profile for this plugin** — Settings > Plugins > Notes,
+   `config_schema.agent_profile`. Pick a profile that can run utility
+   completions; this is the profile that proofreads the note.
 
-Both steps are required because **a disabled utility agent is usable by
-kandev's own built-in features (e.g. task-create prompt enhancement) but not
-by any plugin**, including this one. Kandev's own prompt-enhancement path
-does not check `Enabled`; this plugin's request goes through
-`Host.InvokeUtilityAgent`, which does. That asymmetry is host behavior this
-plugin cannot change — clicking Enhance with an agent selected-but-disabled
-fails exactly like having no agent selected at all, and the two failures now
-say so explicitly rather than both pointing back at Settings > Plugins > Notes:
+The picker lists platform agent profiles directly. You do not need to create,
+enable, or bind a custom **Utility Agent** for new Notes installations.
 
 | Situation | Message points you to |
 | --- | --- |
-| No agent ever selected | Settings > Plugins > Notes |
-| Selected agent was since deleted | Settings > Plugins > Notes |
-| Selected agent exists but is disabled | **Settings > Utility Agents** ("Enable the agent") |
-| Selected and enabled, but no model / agent profile bound | **Settings > Utility Agents** ("Finish setting up the agent") |
-| Any other setup problem the plugin can't identify | no page named; the host's own wording is quoted instead |
-| A real execution failure (the agent ran and failed) | no settings link — try again |
+| No profile selected | Settings > Plugins > Notes |
+| Selected profile was deleted | Settings > Plugins > Notes |
+| Selected profile cannot run utility completions | Settings > Plugins > Notes |
+| A legacy Utility Agent is disabled | **Settings > Utility Agents** ("Enable the agent") |
+| A legacy Utility Agent has no bound profile | **Settings > Utility Agents** ("Finish setting up the agent") |
+| A real execution failure | no settings link — try again |
 
-For the first four, **Dismiss** is joined by a second action button that
-jumps straight to the right page for that cause, so there's no need to guess
-which setting is missing.
-
-The fourth row is the one most people hit, because **every built-in utility
-agent ships with no model bound**: completing steps 1 and 2 above still leaves
-it unconfigured. It is called out separately from "disabled" on purpose —
-both are fixed on the same page but by different controls, and being told to
-enable an agent you just enabled is the dead end this plugin exists to avoid.
-
-The fifth row is the honest fallback: a `FailedPrecondition` this plugin does
-not recognize (for example after a host rephrase). It names no page, because
-any page it named would be a guess, and quotes the host's own wording instead.
+For a recognized setup problem, **Dismiss** is joined by an action that opens
+the relevant settings page. The two Utility Agents messages only apply to
+older configurations retained for compatibility; selecting an agent profile
+in Notes is the supported setup for new installations.
 
 ## Install
 
@@ -168,7 +149,7 @@ curl -F "package=@kandev-plugin-notes-<version>.tar.gz" \
 Sideloaded plugins register disabled/unverified; enable it in
 **Settings > Plugins**. Reinstalling the same version returns 409 — bump the
 version in `manifest.yaml` (and `Makefile`) first. To use "Enhance with AI",
-see "Setting up Enhance with AI" above — it's a two-step setup, not one.
+select an agent profile as described in "Setting up Enhance with AI" above.
 
 ## Development
 

@@ -5,7 +5,7 @@
 // manifest.yaml's capabilities.user_state and ui/bundle.js) — this backend
 // never reads or writes note content directly. Its one job is the
 // "Enhance with AI" feature: relay the note's current markdown to the
-// operator-configured utility agent (capabilities.agent_invoke,
+// operator-configured agent profile (capabilities.agent_invoke,
 // Host.InvokeUtilityAgent) via a single webhook and return the proofread
 // markdown, so the frontend never needs its own LLM credentials. OnEvent
 // stays the UnimplementedPlugin no-op — this plugin subscribes to no events.
@@ -58,12 +58,16 @@ type enhanceResponseBody struct {
 type enhanceErrorCode string
 
 const (
-	// enhanceErrorCodeAgentUnset: the plugin has no utility agent selected
+	// enhanceErrorCodeAgentUnset: the plugin has no agent profile selected
 	// at all (Settings > Plugins > Notes was never used).
 	enhanceErrorCodeAgentUnset enhanceErrorCode = "agent_unset"
-	// enhanceErrorCodeAgentMissing: the selected agent id no longer exists
+	// enhanceErrorCodeAgentMissing: the selected agent profile no longer exists
 	// (deleted after selection).
 	enhanceErrorCodeAgentMissing enhanceErrorCode = "agent_missing"
+	// enhanceErrorCodeAgentIneligible: the selected profile cannot run a
+	// utility completion. Selecting an eligible profile in this plugin's
+	// settings is the only remedy.
+	enhanceErrorCodeAgentIneligible enhanceErrorCode = "agent_ineligible"
 	// enhanceErrorCodeAgentDisabled: the selected agent exists but is
 	// disabled — a different fix (Settings > Utility Agents), not a
 	// reselection, per the ADR 0048 Enabled asymmetry this plugin cannot
@@ -78,11 +82,6 @@ const (
 	// state every built-in utility agent ships in, so it is what a user hits
 	// immediately after completing the README's two documented steps.
 	enhanceErrorCodeAgentUnconfiguredProfile enhanceErrorCode = "agent_unconfigured_profile"
-	// enhanceErrorCodeAgentUnavailable: a FailedPrecondition whose wording
-	// matched none of the above — the host may have rephrased its message.
-	// Detail still carries that raw wording verbatim so the user sees real
-	// information rather than a guessed instruction.
-	enhanceErrorCodeAgentUnavailable enhanceErrorCode = "agent_unavailable"
 )
 
 // enhanceErrorMessages pairs each code with the one correct remedy. Keep
@@ -90,52 +89,58 @@ const (
 // composes an error message inline, so unset/missing and disabled can never
 // be swapped at a call site.
 var enhanceErrorMessages = map[enhanceErrorCode]string{
-	enhanceErrorCodeAgentUnset:               "No utility agent is configured for this plugin — configure one in Settings > Plugins > Notes.",
-	enhanceErrorCodeAgentMissing:             "The utility agent configured for this plugin no longer exists — choose another one in Settings > Plugins > Notes.",
+	enhanceErrorCodeAgentUnset:               "No agent profile is configured for this plugin — choose one in Settings > Plugins > Notes.",
+	enhanceErrorCodeAgentMissing:             "The agent profile configured for this plugin no longer exists — choose another one in Settings > Plugins > Notes.",
+	enhanceErrorCodeAgentIneligible:          "The agent profile configured for this plugin is not eligible for utility execution — choose an eligible profile in Settings > Plugins > Notes.",
 	enhanceErrorCodeAgentDisabled:            "The utility agent configured for this plugin is disabled — enable it (with a model) in Settings > Utility Agents.",
 	enhanceErrorCodeAgentUnconfiguredProfile: "The utility agent configured for this plugin has no model or agent profile bound — finish setting it up in Settings > Utility Agents.",
-	enhanceErrorCodeAgentUnavailable:         "The configured utility agent is unavailable.",
 }
 
-// enhanceErrorMessage resolves the user-facing message for a code. A
-// classified cause names the one page that fixes it. agent_unavailable is by
-// definition a FailedPrecondition this plugin could NOT classify, so there is
-// no page it can name without guessing — naming one anyway is how a user who
-// has already done that step gets sent back to it. It therefore surfaces the
-// host's own wording instead of a remedy that may not apply, which is the
-// degradation this classifier was designed for: a missing button, not a wrong
-// instruction.
-func enhanceErrorMessage(code enhanceErrorCode, detail string) string {
-	message := enhanceErrorMessages[code]
-	if code == enhanceErrorCodeAgentUnavailable && detail != "" {
-		return message + " The host reported: " + detail
-	}
-	return message
+// enhanceErrorMessage resolves the user-facing message for a recognized
+// configuration error. Unknown gRPC errors are execution failures, not setup
+// states, and therefore never reach this function.
+func enhanceErrorMessage(code enhanceErrorCode) string {
+	return enhanceErrorMessages[code]
 }
 
-// classifyUtilityAgentError maps each of host_utility.go's four
-// FailedPrecondition wordings ("no utility agent configured for this plugin",
-// "configured utility agent %q not found", "configured utility agent %q is
-// disabled", "configured utility agent %q has no usable agent profile") to a
-// stable code, kept as its own function (rather than inlined at the call
-// site) so the mapping is unit-testable in isolation and has exactly one
-// home. Substring matching is coupled to the host's current wording — a
-// rephrase degrades to enhanceErrorCodeAgentUnavailable rather than
-// misclassifying, since Detail (the raw message) is always preserved
-// alongside it.
-func classifyUtilityAgentError(message string) enhanceErrorCode {
+// classifyAgentProfileError maps the host's direct-profile FailedPrecondition
+// messages to stable codes. It also retains the two legacy utility-agent
+// messages that have distinct Utility Agents remedies for existing configs.
+// The direct messages are intentionally exact (apart from the quoted ID): an
+// unfamiliar host message must remain an execution failure instead of being
+// guessed as a settings problem.
+func classifyAgentProfileError(message string) (enhanceErrorCode, bool) {
 	switch {
-	case strings.Contains(message, "no utility agent configured"):
-		return enhanceErrorCodeAgentUnset
-	case strings.Contains(message, "not found"):
-		return enhanceErrorCodeAgentMissing
-	case strings.Contains(message, "is disabled"):
-		return enhanceErrorCodeAgentDisabled
-	case strings.Contains(message, "no usable agent profile"):
-		return enhanceErrorCodeAgentUnconfiguredProfile
+	case message == "no agent profile configured for this plugin":
+		return enhanceErrorCodeAgentUnset, true
+	case isQuotedConfigurationError(message, "configured agent profile ", " not found"):
+		return enhanceErrorCodeAgentMissing, true
+	case isQuotedConfigurationError(message, "configured agent profile ", " is not eligible for utility execution"):
+		return enhanceErrorCodeAgentIneligible, true
+	case isQuotedConfigurationError(message, "configured utility agent ", " is disabled"):
+		return enhanceErrorCodeAgentDisabled, true
+	case isQuotedConfigurationError(message, "configured utility agent ", " has no usable agent profile"):
+		return enhanceErrorCodeAgentUnconfiguredProfile, true
+	case message == "no utility agent configured for this plugin":
+		// Old hosts used this before the agent_profile config field. The new
+		// Notes settings page is still the right place to select a profile.
+		return enhanceErrorCodeAgentUnset, true
+	case isQuotedConfigurationError(message, "configured utility agent ", " not found"):
+		return enhanceErrorCodeAgentMissing, true
 	default:
-		return enhanceErrorCodeAgentUnavailable
+		return "", false
 	}
+}
+
+// isQuotedConfigurationError recognizes the host's formatted %q ID messages
+// without loosening the classifier to unrelated prose that merely shares a
+// suffix such as "not found".
+func isQuotedConfigurationError(message, prefix, suffix string) bool {
+	if !strings.HasPrefix(message, prefix) || !strings.HasSuffix(message, suffix) {
+		return false
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(message, prefix), suffix)
+	return len(id) >= 2 && id[0] == '"' && id[len(id)-1] == '"'
 }
 
 // enhanceErrorBody is the JSON body returned on a handled failure (missing
@@ -187,19 +192,17 @@ func (p *notesPlugin) HandleWebhook(ctx context.Context, req *pluginsdk.WebhookR
 	improved, err := host.InvokeUtilityAgent(ctx, fmt.Sprintf(enhancePromptTemplate, body.Content))
 	if err != nil {
 		if status.Code(err) == codes.FailedPrecondition {
-			// No utility agent configured, or the configured one was
-			// deleted/disabled — a distinguishable, non-fatal condition per
-			// ADR 0048, not an internal error. classifyUtilityAgentError
-			// turns the host's raw gRPC message into a stable code (C1) so
-			// the UI can point at the correct settings page (C2) instead of
-			// this one message covering unset/missing/disabled alike.
+			// A known configuration failure is non-fatal and lets the UI point
+			// at the one setting that fixes it. Other FailedPreconditions can
+			// describe a failed invocation, so they remain execution errors.
 			rawMessage := status.Convert(err).Message()
-			code := classifyUtilityAgentError(rawMessage)
-			return jsonResponse(http.StatusPreconditionFailed, enhanceErrorBody{
-				Error:  enhanceErrorMessage(code, rawMessage),
-				Code:   code,
-				Detail: rawMessage,
-			})
+			if code, ok := classifyAgentProfileError(rawMessage); ok {
+				return jsonResponse(http.StatusPreconditionFailed, enhanceErrorBody{
+					Error:  enhanceErrorMessage(code),
+					Code:   code,
+					Detail: rawMessage,
+				})
+			}
 		}
 		return jsonErrorResponse(http.StatusBadGateway, "AI enhancement failed")
 	}

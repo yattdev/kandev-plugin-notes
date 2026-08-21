@@ -118,7 +118,7 @@ func TestManifestCapabilities_UserStateAndAgentInvoke(t *testing.T) {
 	require.Equal(t, map[string]any{"user_state": true, "agent_invoke": true}, m.Capabilities)
 }
 
-func TestManifest_DeclaresEnhanceWebhookAndUtilityAgentConfig(t *testing.T) {
+func TestManifest_DeclaresEnhanceWebhookAndAgentProfileConfig(t *testing.T) {
 	m := loadManifest(t)
 	require.Len(t, m.Webhooks, 1)
 	webhook, ok := m.Webhooks[0].(map[string]any)
@@ -129,10 +129,11 @@ func TestManifest_DeclaresEnhanceWebhookAndUtilityAgentConfig(t *testing.T) {
 	require.NotEmpty(t, m.ConfigSchema)
 	properties, ok := m.ConfigSchema["properties"].(map[string]any)
 	require.True(t, ok, "config_schema.properties should decode as a map")
-	utilityAgent, ok := properties["utility_agent"].(map[string]any)
-	require.True(t, ok, "config_schema.properties.utility_agent should decode as a map")
-	require.Equal(t, "string", utilityAgent["type"])
-	require.Equal(t, "utility-agent", utilityAgent["format"])
+	agentProfile, ok := properties["agent_profile"].(map[string]any)
+	require.True(t, ok, "config_schema.properties.agent_profile should decode as a map")
+	require.Equal(t, "string", agentProfile["type"])
+	require.Equal(t, "agent-profile", agentProfile["format"])
+	require.NotContains(t, properties, "utility_agent")
 }
 
 func TestManifestUI_BundlePathHasLeadingSlash(t *testing.T) {
