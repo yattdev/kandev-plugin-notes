@@ -45,7 +45,7 @@
 // document shared by everyone on the task; the empty-state copy below says
 // so explicitly. AI enhance is the one documented exception to "the agent
 // cannot read your note": clicking it sends the note's current markdown to
-// the operator-configured utility agent (README's Privacy section explains
+// the operator-configured agent profile (README's Privacy section explains
 // this trade-off).
 
 // DEFAULT_SCOPE is the store/cache default when no scope is given, keeping
@@ -290,16 +290,16 @@ export async function enhanceNote(host, content) {
   }
 
   if (!response.ok) {
-    // 412 is this webhook's distinguishable "no utility agent configured"
+    // 412 is this webhook's distinguishable agent-profile configuration
     // signal (server/plugin.go, mapped from gRPC FailedPrecondition per
     // ADR 0048) — surfaced as a clear, non-fatal message rather than a
     // generic failure. `code`/`detail` (C1) let the UI point at the right
-    // settings page instead of one message covering unset/missing/disabled
+    // settings page instead of one message covering unset/missing/ineligible
     // alike; an older server that omits them (C5) leaves both undefined and
     // the caller falls back to the plain message with no action button.
     const notConfigured = response.status === 412;
     const message = notConfigured
-      ? (data && data.error) || "No utility agent is configured for this plugin yet."
+      ? (data && data.error) || "No agent profile is configured for this plugin yet."
       : (data && data.error) || `Could not enhance this note (status ${response.status}).`;
     const error = new Error(message);
     error.notConfigured = notConfigured;
@@ -359,24 +359,26 @@ export function enhancePreviewReducer(state, action) {
 
 // enhanceErrorAction (C2/C4) maps an enhance failure's `code` to the guided
 // setup action NotesEditor's error branch renders beside Dismiss: which
-// settings page fixes *this* cause, in its own words. "unset"/"missing" both
-// land on the Notes plugin page (pick or re-pick an agent); "disabled" and
+// settings page fixes *this* cause, in its own words. "unset"/"missing" and
+// "ineligible" all land on the Notes plugin page (pick an eligible profile);
+// the legacy "disabled" and
 // "unconfigured_profile" land on Utility Agents instead — a different page,
-// because picking an agent there again would not fix either one (see
-// server/plugin.go's classifyUtilityAgentError comment for the host-side half
+// because picking a profile there again would not fix either one (see
+// server/plugin.go's classifyAgentProfileError comment for the host-side half
 // of this split). The two Utility Agents causes keep separate labels because
 // they are separate controls on that page: flipping Enabled, versus binding a
 // model/profile. Telling someone to "enable" an agent they just enabled is
 // the dead end this whole mapping exists to remove.
 // A pure function (no host, no React) so C7's code -> action mapping is
-// testable directly; returns null for an absent/unrecognized code (C5: an
-// older server that omits `code`, or "agent_unavailable" — a cause the plugin
-// could not identify, where the message alone is what's known).
+// testable directly; returns null for an absent or unrecognized code, such as
+// an older server that omits `code`.
 export function enhanceErrorAction(code) {
   switch (code) {
     case "agent_unset":
     case "agent_missing":
-      return { label: "Choose an agent", href: "/settings/plugins/kandev-plugin-notes" };
+      return { label: "Choose an agent profile", href: "/settings/plugins/kandev-plugin-notes" };
+    case "agent_ineligible":
+      return { label: "Choose an eligible profile", href: "/settings/plugins/kandev-plugin-notes" };
     case "agent_disabled":
       return { label: "Enable the agent", href: "/settings/utility-agents" };
     case "agent_unconfigured_profile":
@@ -1253,7 +1255,7 @@ function NotesEditor({ host, scope = DEFAULT_SCOPE, scopeId, taskId, surfaceId, 
       disabled: isEnhancing || !snapshot.value,
       "aria-busy": isEnhancing,
       "data-testid": "notes-enhance-button",
-      title: "Enhance with AI — proofread this note with your configured utility agent",
+      title: "Enhance with AI — proofread this note with your configured agent profile",
     },
     isEnhancing
       ? h(ui.Spinner, { className: "h-4 w-4" })
@@ -1365,7 +1367,7 @@ function NotesEditor({ host, scope = DEFAULT_SCOPE, scopeId, taskId, surfaceId, 
     h(
       "p",
       { style: { color: "var(--muted-foreground)", fontSize: "0.8rem", marginBottom: "0.5rem" } },
-      "Private to you — only you can see this note. Using \u201cEnhance with AI\u201d sends its content to your configured utility agent.",
+      "Private to you — only you can see this note. Using \u201cEnhance with AI\u201d sends its content to your configured agent profile.",
     ),
     h(
       "div",

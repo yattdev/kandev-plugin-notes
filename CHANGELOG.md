@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0] - 2026-08-21
+
+### Changed
+
+- Enhance with AI now selects a platform `agent_profile` directly in Notes
+  settings, replacing the custom `utility_agent` picker for new
+  configurations.
+- Guided setup now distinguishes missing and ineligible agent profiles, while
+  preserving disabled and unconfigured legacy Utility Agent guidance.
+
 ## [0.4.0] - 2026-08-18
 
 ### Changed
@@ -78,4 +88,3 @@
 - ci: tidy go.mod to promote direct grpc dependency (0ed27c4)
 - qa: handle list toolbar on blank notes (a1c18cd)
 - feat: markdown toolbar, AI-assisted proofreading, and a fixed-size note modal (4c84eb9)
-

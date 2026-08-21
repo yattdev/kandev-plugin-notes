@@ -1138,14 +1138,14 @@ test("enhanceNote posts the note content to webhooks/enhance and returns the imp
 
 test("enhanceNote maps a 412 response to a distinguishable notConfigured error", async () => {
   const host = fakeApiHost(async () =>
-    fakeJsonResponse(412, { error: "no utility agent is configured for this plugin" }),
+    fakeJsonResponse(412, { error: "no agent profile is configured for this plugin" }),
   );
 
   await assert.rejects(
     () => enhanceNote(host, "raw markdown"),
     (error) => {
       assert.equal(error.notConfigured, true);
-      assert.match(error.message, /utility agent/);
+      assert.match(error.message, /agent profile/);
       return true;
     },
   );
@@ -1190,13 +1190,17 @@ test("C5: enhanceNote leaves code/detail undefined when an older server's 412 bo
 
 // --- C2/C4/C5: enhanceErrorAction maps a code to its one correct remedy ---
 
-test("C2: enhanceErrorAction sends agent_unset and agent_missing to the Notes plugin settings page", () => {
+test("C2: enhanceErrorAction sends direct profile setup errors to the Notes plugin settings page", () => {
   assert.deepEqual(enhanceErrorAction("agent_unset"), {
-    label: "Choose an agent",
+    label: "Choose an agent profile",
     href: "/settings/plugins/kandev-plugin-notes",
   });
   assert.deepEqual(enhanceErrorAction("agent_missing"), {
-    label: "Choose an agent",
+    label: "Choose an agent profile",
+    href: "/settings/plugins/kandev-plugin-notes",
+  });
+  assert.deepEqual(enhanceErrorAction("agent_ineligible"), {
+    label: "Choose an eligible profile",
     href: "/settings/plugins/kandev-plugin-notes",
   });
 });
@@ -1217,8 +1221,7 @@ test("agent_unconfigured_profile gets its own action on Utility Agents, distinct
   assert.notEqual(action.href, enhanceErrorAction("agent_unset").href);
 });
 
-test("C5: enhanceErrorAction returns null for agent_unavailable, an unrecognized code, and a missing code", () => {
-  assert.equal(enhanceErrorAction("agent_unavailable"), null);
+test("C5: enhanceErrorAction returns null for an unrecognized or missing code", () => {
   assert.equal(enhanceErrorAction("something_new_the_server_added"), null);
   assert.equal(enhanceErrorAction(undefined), null);
 });
