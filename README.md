@@ -177,29 +177,3 @@ and the [manifest reference](https://github.com/kdlbs/kandev/blob/main/docs/publ
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-
-The Kandev plugin SDK (`pkg/pluginsdk`) is not yet published as a standalone Go
-module, so `go.mod` uses a local `replace` that expects the Kandev monorepo as a
-**sibling checkout**:
-
-```text
-some-dir/
-├── kandev/                 # https://github.com/kdlbs/kandev — Go module at apps/backend/
-└── kandev-plugin-notes/    # this repo
-```
-
-```sh
-make build   # host binary
-make test    # Go + JS unit tests
-make vet
-make package-host   # host-platform package — fastest local loop
-make package        # all five platforms
-```
-
-Start with the [plugin authoring guide](https://github.com/kdlbs/kandev/blob/main/docs/public/plugins-authoring.md)
-and the [manifest reference](https://github.com/kdlbs/kandev/blob/main/docs/public/plugins-manifest.md).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
