@@ -5,7 +5,7 @@
 # (/api/plugins/<id>/...). Keep the three in sync when bumping version.
 id: "kandev-plugin-notes"
 api_version: 1
-version: "0.4.0"
+version: "0.5.0"
 display_name: "Notes"
 description: "A private, per-user scratchpad note on any task or workspace: a dockview/mobile panel, a sidebar workspace-notes button, markdown editing with a formatting toolbar, AI-assisted proofreading with guided setup, and a kanban card shortcut."
 author: "yattdev"
@@ -29,7 +29,7 @@ runtime:
 # per-user browser-reachable storage (host.storage) for the note itself, plus
 # agent_invoke so the "Enhance with AI" button can run a one-shot proofreading
 # completion via Host.InvokeUtilityAgent (see server/plugin.go and the
-# `utility_agent` config property below).
+# `agent_profile` config property below).
 capabilities:
   user_state: true
   agent_invoke: true
@@ -40,18 +40,18 @@ capabilities:
 # and returns the improved markdown for the UI's preview/Accept/Discard flow.
 webhooks:
   - key: "enhance"
-    description: "Proofread and improve the current note's markdown via the configured utility agent"
+    description: "Proofread and improve the current note's markdown via the configured agent profile"
     method: "POST"
 
-# config_schema: agent_invoke requires a utility_agent picker (rendered at
-# Settings > Plugins > Notes) so the operator selects which agent runs the
-# enhance completion. Calling Host.InvokeUtilityAgent without a valid
-# selection here returns a distinguishable FailedPrecondition (see
+# config_schema: agent_invoke requires an agent_profile picker (rendered at
+# Settings > Plugins > Notes) so the operator selects the platform profile
+# that runs the enhance completion. Calling Host.InvokeUtilityAgent without a
+# valid selection returns a distinguishable FailedPrecondition (see
 # server/plugin.go), surfaced by the UI as a non-fatal message.
 config_schema:
   type: object
   properties:
-    utility_agent: { type: string, format: utility-agent, title: "Utility Agent", description: "Agent used to proofread notes for the Enhance with AI button" }
+    agent_profile: { type: string, format: agent-profile, title: "Agent profile", description: "Agent profile used to proofread notes for the Enhance with AI button" }
 
 # ui.bundle points at the hand-written, no-build ES module frontend half.
 ui:
