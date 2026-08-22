@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.0] - 2026-08-22
+
+### Changed
+
+- docs: finalize notes agent-profile release docs (80ba6f1)
+- feat: select notes agent profiles directly (1aec2a5)
+- docs: finalize notes agent-profile release docs (5bc3a84)
+- feat: select notes agent profiles directly (3574371)
+
+
 ## [0.5.0] - 2026-08-20
 
 ### Changed
