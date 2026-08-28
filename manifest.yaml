@@ -2,7 +2,9 @@
 # plugin and a kandev host. `id` MUST match the Go module name in go.mod and
 # the id passed to window.registerKandevPlugin(...) in ui/bundle.js, and it is
 # the prefix of every route kandev serves for this plugin
-# (/api/plugins/<id>/...). Keep the three in sync when bumping version.
+# (/api/plugins/<id>/...). It also namespaces every plugin_user_state row:
+# changing it would strand every saved note. Keep it immutable across releases
+# unless a host-backed data migration ships first.
 id: "kandev-plugin-notes"
 api_version: 1
 version: "0.6.0"
@@ -26,7 +28,9 @@ runtime:
     windows-amd64: "server/plugin-windows-amd64.exe"
 
 # capabilities gate what the host will do for this plugin. This plugin needs
-# per-user browser-reachable storage (host.storage) for the note itself, plus
+# per-user browser-reachable storage (host.storage) for the note itself. This
+# capability is part of the persistence contract: removing it makes all saved
+# notes inaccessible. The plugin also needs
 # agent_invoke so the "Enhance with AI" button can run a one-shot proofreading
 # completion via Host.InvokeUtilityAgent (see server/plugin.go and the
 # `agent_profile` config property below).

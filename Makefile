@@ -20,6 +20,7 @@ run: build
 test:
 	go test ./server/...
 	node --test "ui/**/*.test.mjs"
+	sh scripts/test-host-upgrade-state.sh
 
 fmt:
 	gofmt -l .

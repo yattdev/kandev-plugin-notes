@@ -17,7 +17,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const repoRoot = ".."
+const (
+	repoRoot         = ".."
+	releasedPluginID = "kandev-plugin-notes"
+)
 
 type manifestYAML struct {
 	ID           string         `yaml:"id"`
@@ -106,6 +109,28 @@ func TestManifestIdentity_MatchesMakefileBinAndPkgOut(t *testing.T) {
 func TestManifestIdentity_MatchesBundleRegistrationID(t *testing.T) {
 	m := loadManifest(t)
 	require.Equal(t, m.ID, bundleRegistrationID(t))
+}
+
+func TestManifestPersistenceContract_PreservesReleasedUserStateNamespace(t *testing.T) {
+	m := loadManifest(t)
+	require.Equal(
+		t,
+		releasedPluginID,
+		m.ID,
+		"the plugin id namespaces every saved note; changing it requires an explicit data migration",
+	)
+	require.Equal(
+		t,
+		releasedPluginID,
+		bundleRegistrationID(t),
+		"the UI registration id must keep addressing the released note namespace",
+	)
+	require.Equal(
+		t,
+		true,
+		m.Capabilities["user_state"],
+		"removing user_state makes existing notes inaccessible",
+	)
 }
 
 func TestManifestVersion_MatchesMakefileVersion(t *testing.T) {
