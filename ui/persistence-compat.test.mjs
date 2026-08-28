@@ -292,13 +292,23 @@ for (const tag of tags) {
     const state = new PersistentUserState();
     const scopeId = "task-" + tag;
     const released = releasedBundles.get(tag);
-    const historical =
-      "# Historical " +
-      tag +
-      "\n\n- [x] keep **all** markdown\n- owner: " +
-      TEST_USER_ID;
-    const candidate =
-      "# Candidate edit for " + tag + "\n\nInline code and Markdown stay byte-for-byte.";
+    const historical = [
+      "# Historical " + tag,
+      "",
+      "- [x] keep **all** markdown  ",
+      "- owner: " + TEST_USER_ID,
+      "- unicode: Café 東京 🚀",
+      "",
+    ].join("\r\n");
+    const candidate = [
+      "# Candidate edit for " + tag,
+      "",
+      "Inline code and Markdown stay byte-for-byte.",
+      "",
+      "    indented code",
+      "trailing spaces  ",
+      "unicode: naïve Привет 🌍",
+    ].join("\n");
 
     await writeNote(released, state, "task", scopeId, historical);
     assert.equal(await readNote(candidateBundle, state, "task", scopeId), historical);
@@ -315,8 +325,19 @@ for (const tag of tags.filter((candidate) => versionAtLeast(candidate, FIRST_WOR
     const state = new PersistentUserState();
     const scopeId = "workspace-" + tag;
     const released = releasedBundles.get(tag);
-    const historical = "## Workspace " + tag + "\n\nPersistent workspace idea.";
-    const candidate = "## Candidate workspace edit\n\nStill present after " + tag + ".";
+    const historical = [
+      "## Workspace " + tag,
+      "",
+      "Persistent workspace idea.  ",
+      "日本語 workspace note",
+      "",
+    ].join("\r\n");
+    const candidate = [
+      "## Candidate workspace edit",
+      "",
+      "Still present after " + tag + ".",
+      "emoji: 📝",
+    ].join("\n");
 
     await writeNote(released, state, "workspace", scopeId, historical);
     assert.equal(await readNote(candidateBundle, state, "workspace", scopeId), historical);
@@ -334,7 +355,7 @@ test("a task-only downgrade hides but never deletes a workspace note", async () 
   const taskId = "task-opened-during-old-release";
   const workspaceBundle = releasedBundles.get(FIRST_WORKSPACE_NOTES_TAG);
   const taskOnlyBundle = releasedBundles.get(FIRST_TASK_NOTES_TAG);
-  const content = "# Workspace note\n\nRecover me after the old release.";
+  const content = "# Workspace note\r\n\r\nRecover me after the old release.  \r\n復元してください";
 
   await writeNote(workspaceBundle, state, "workspace", scopeId, content);
 
