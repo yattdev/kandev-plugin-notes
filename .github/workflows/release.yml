@@ -159,6 +159,8 @@ jobs:
         with:
           path: plugin
           ref: ${{ github.event_name == 'push' && github.ref || needs.prepare.outputs.tag }}
+          # Release verification replays every published Notes bundle.
+          fetch-depth: 0
 
       - name: Checkout kandev SDK
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0

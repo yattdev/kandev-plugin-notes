@@ -151,6 +151,28 @@ Sideloaded plugins register disabled/unverified; enable it in
 version in `manifest.yaml` (and `Makefile`) first. To use "Enhance with AI",
 select an agent profile as described in "Setting up Enhance with AI" above.
 
+## Updating or downgrading without losing notes
+
+Install the different Notes version directly over the existing installation,
+using Kandev's Update/version action or the install endpoint above. Kandev
+replaces that plugin version in place, and Notes keeps addressing the same
+per-user task and workspace rows. The automated release gate replays every
+published Notes bundle in both directions and verifies the saved Markdown
+byte-for-byte.
+
+Do **not** click Uninstall as a step in changing versions. Explicit uninstall
+has different semantics: Kandev intentionally purges that plugin's user state,
+including all Notes rows, before removing the package. Uninstall/reinstall is
+therefore not an update or downgrade path.
+
+For a disposable manual smoke check:
+
+1. Save distinct task and workspace notes, including Markdown formatting.
+2. Install a different Notes version directly over the active version.
+3. Reopen both notes and compare their exact content.
+4. Install the original version directly over it and verify both notes again.
+5. Optionally repeat as a second user to confirm the two users remain isolated.
+
 ## Development
 
 The Kandev plugin SDK (`pkg/pluginsdk`) is not yet published as a standalone Go
