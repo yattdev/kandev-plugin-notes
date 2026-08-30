@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1] - 2026-08-30
+
+### Changed
+
+- qa: cover exact note text preservation (3e2e0aa)
+- test: gate notes version persistence (666e9c9)
+
+
 ## [0.6.0] - 2026-08-22
 
 ### Changed

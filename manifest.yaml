@@ -7,7 +7,7 @@
 # unless a host-backed data migration ships first.
 id: "kandev-plugin-notes"
 api_version: 1
-version: "0.6.0"
+version: "0.6.1"
 display_name: "Notes"
 description: "A private, per-user scratchpad note on any task or workspace: a dockview/mobile panel, a sidebar workspace-notes button, markdown editing with a formatting toolbar, AI-assisted proofreading with guided setup, and a kanban card shortcut."
 author: "yattdev"
