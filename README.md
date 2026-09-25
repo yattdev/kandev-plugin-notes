@@ -107,6 +107,11 @@ leaves the "nobody else can read it" boundary for that one request. See
 what each failure message means. Skip the button entirely to keep a note
 fully private.
 
+Notes passes its saved profile explicitly to the host. A missing selection
+prompts you to choose a profile in Notes settings; it never falls back to the
+platform default profile. Deleted or ineligible selections also require a
+replacement in Notes settings.
+
 If you want a task's own agent to see something, put it in the task
 description or say it in chat. This is a scratchpad, not a shared field.
 
