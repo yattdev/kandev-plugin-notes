@@ -113,9 +113,11 @@ func classifyAgentProfileError(message string) (enhanceErrorCode, bool) {
 	switch {
 	case message == "no agent profile configured for this plugin":
 		return enhanceErrorCodeAgentUnset, true
-	case isQuotedConfigurationError(message, "configured agent profile ", " not found"):
+	case isQuotedConfigurationError(message, "agent profile ", " not found"),
+		isQuotedConfigurationError(message, "configured agent profile ", " not found"):
 		return enhanceErrorCodeAgentMissing, true
-	case isQuotedConfigurationError(message, "configured agent profile ", " is not eligible for utility execution"):
+	case isQuotedConfigurationError(message, "agent profile ", " is not eligible for utility execution"),
+		isQuotedConfigurationError(message, "configured agent profile ", " is not eligible for utility execution"):
 		return enhanceErrorCodeAgentIneligible, true
 	case isQuotedConfigurationError(message, "configured utility agent ", " is disabled"):
 		return enhanceErrorCodeAgentDisabled, true
@@ -189,7 +191,19 @@ func (p *notesPlugin) HandleWebhook(ctx context.Context, req *pluginsdk.WebhookR
 		return jsonErrorResponse(http.StatusServiceUnavailable, "plugin host unavailable")
 	}
 
-	improved, err := host.InvokeUtilityAgent(ctx, fmt.Sprintf(enhancePromptTemplate, body.Content))
+	config, err := host.GetConfig(ctx)
+	if err != nil {
+		return jsonErrorResponse(http.StatusBadGateway, "AI enhancement failed")
+	}
+	profileID, _ := config["agent_profile"].(string)
+	if strings.TrimSpace(profileID) == "" {
+		return jsonResponse(http.StatusPreconditionFailed, enhanceErrorBody{
+			Error:  enhanceErrorMessage(enhanceErrorCodeAgentUnset),
+			Code:   enhanceErrorCodeAgentUnset,
+			Detail: "no agent profile configured for this plugin",
+		})
+	}
+	improved, err := host.InvokeUtilityAgent(ctx, fmt.Sprintf(enhancePromptTemplate, body.Content), pluginsdk.UtilityAgentOptions{ProfileID: profileID})
 	if err != nil {
 		if status.Code(err) == codes.FailedPrecondition {
 			// A known configuration failure is non-fatal and lets the UI point

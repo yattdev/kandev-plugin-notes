@@ -49,9 +49,9 @@ webhooks:
 
 # config_schema: agent_invoke requires an agent_profile picker (rendered at
 # Settings > Plugins > Notes) so the operator selects the platform profile
-# that runs the enhance completion. Calling Host.InvokeUtilityAgent without a
-# valid selection returns a distinguishable FailedPrecondition (see
-# server/plugin.go), surfaced by the UI as a non-fatal message.
+# that runs the enhance completion. Notes passes this selection explicitly
+# to Host.InvokeUtilityAgent and returns HTTP 412 when no profile is selected,
+# surfaced by the UI as a non-fatal message.
 config_schema:
   type: object
   properties:

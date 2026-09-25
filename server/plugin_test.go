@@ -16,14 +16,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// fakeHost is a minimal pluginsdk.Host test double. notesPlugin only calls
-// InvokeUtilityAgent, so that is the one overridable stub; every other
-// accessor is a bare no-op. UnimplementedHostData covers the data-API
+// fakeHost is a minimal pluginsdk.Host test double with configurable
+// configuration reads and utility invocations. UnimplementedHostData covers the data-API
 // sub-accessors (Tasks/Sessions/...), and the state/secret/event methods
 // below cover the rest of the interface.
 type fakeHost struct {
 	pluginsdk.UnimplementedHostData
 	invokeUtilityAgent func(ctx context.Context, prompt string) (string, error)
+	invokeWithOptions  func(context.Context, string, ...pluginsdk.UtilityAgentOptions) (string, error)
+	getConfig          func(context.Context) (map[string]any, error)
 }
 
 func (fakeHost) GetState(context.Context, string, string, string) (map[string]any, bool, error) {
@@ -34,7 +35,12 @@ func (fakeHost) DeleteState(context.Context, string, string, string) error      
 func (fakeHost) ListState(context.Context, string, string) ([]pluginsdk.StateEntry, error) {
 	return nil, nil
 }
-func (fakeHost) GetConfig(context.Context) (map[string]any, error)    { return map[string]any{}, nil }
+func (h fakeHost) GetConfig(ctx context.Context) (map[string]any, error) {
+	if h.getConfig != nil {
+		return h.getConfig(ctx)
+	}
+	return map[string]any{"agent_profile": "selected-profile"}, nil
+}
 func (fakeHost) RevealSecret(context.Context, string) (string, error) { return "", nil }
 func (fakeHost) GetSecret(context.Context, string) (string, bool, error) {
 	return "", false, nil
@@ -43,7 +49,10 @@ func (fakeHost) SetSecret(context.Context, string, string) error         { retur
 func (fakeHost) DeleteSecret(context.Context, string) error              { return nil }
 func (fakeHost) EmitEvent(context.Context, string, map[string]any) error { return nil }
 
-func (h fakeHost) InvokeUtilityAgent(ctx context.Context, prompt string) (string, error) {
+func (h fakeHost) InvokeUtilityAgent(ctx context.Context, prompt string, options ...pluginsdk.UtilityAgentOptions) (string, error) {
+	if h.invokeWithOptions != nil {
+		return h.invokeWithOptions(ctx, prompt, options...)
+	}
 	if h.invokeUtilityAgent != nil {
 		return h.invokeUtilityAgent(ctx, prompt)
 	}
@@ -230,6 +239,16 @@ func TestHandleWebhook_Enhance_ClassifiesEachFailedPreconditionWording(t *testin
 		hostMessage string
 		wantCode    enhanceErrorCode
 	}{
+		{
+			name:        "current profile missing",
+			hostMessage: `agent profile "profile-1" not found`,
+			wantCode:    enhanceErrorCodeAgentMissing,
+		},
+		{
+			name:        "current profile ineligible",
+			hostMessage: `agent profile "profile-1" is not eligible for utility execution`,
+			wantCode:    enhanceErrorCodeAgentIneligible,
+		},
 		{
 			name:        "direct profile unset",
 			hostMessage: "no agent profile configured for this plugin",
